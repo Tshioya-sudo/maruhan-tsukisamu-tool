@@ -114,6 +114,14 @@ def main():
         logger.info("新規データなし。終了。")
         return
 
+    # 4.1 1回の実行で処理する日数を制限（GitHub Actions 15分タイムアウト対策）
+    # 1日分≒40秒 × 5日 = 約3〜4分。余裕を持って5日に制限。
+    # 未取得分が残っていれば次回実行で自動的に続きを取得する。
+    MAX_DATES_PER_RUN = 5
+    if len(new_dates) > MAX_DATES_PER_RUN:
+        logger.info(f"1回の実行上限{MAX_DATES_PER_RUN}日に制限（残り{len(new_dates) - MAX_DATES_PER_RUN}日は次回）")
+        new_dates = new_dates[:MAX_DATES_PER_RUN]
+
     # 4.5 機種名をみんレポの実際の表記と照合
     first_article_id = new_dates[0]["article_id"]
     verified_machines = scraper.get_verified_machine_names(first_article_id)
