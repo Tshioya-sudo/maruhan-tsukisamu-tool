@@ -331,5 +331,253 @@ for machine, info in sorted(machine_data.items(), key=lambda x: -x[1]["rate"]):
                 suffix_text = " / ".join([f"末尾{s}({d['rate']*100:.0f}%)" for s, d in hot[:3]])
                 st.markdown(f"**狙い末尾:** {suffix_text}")
 
+# =============================================
+# ★★★ 据え置き・設定変更パターン ★★★
+# =============================================
+st.markdown("---")
+st.header("🔄 据え置き・設定変更パターン")
+st.caption("前日高設定だった台が翌日どうなったか → 据え置き狙いの判断材料")
+
+# 日付をソートして前日→翌日のペアを作る
+sorted_dates = sorted(df["play_date"].dropna().unique())
+sueoki_data = []
+for i in range(len(sorted_dates) - 1):
+    date_prev = sorted_dates[i]
+    date_next = sorted_dates[i + 1]
+    prev_df = df[df["play_date"] == date_prev]
+    next_df = df[df["play_date"] == date_next]
+
+    # 前日に高設定だった台
+    high_prev = prev_df[prev_df["estimated_setting"] >= 4]
+    for _, row in high_prev.iterrows():
+        machine = row.get("machine_name")
+        unit = row.get("unit_number")
+        if pd.isna(unit):
+            continue
+        # 翌日の同じ台を探す
+        next_same = next_df[
+            (next_df["machine_name"] == machine) &
+            (next_df["unit_number"] == unit)
+        ]
+        if not next_same.empty:
+            next_setting = next_same.iloc[0].get("estimated_setting")
+            if pd.notna(next_setting):
+                sueoki_data.append({
+                    "前日": date_prev,
+                    "翌日": date_next,
+                    "機種": machine,
+                    "台番号": int(unit),
+                    "前日設定": int(row["estimated_setting"]),
+                    "翌日設定": int(next_setting),
+                    "据え置き": "○" if next_setting >= 4 else "✕",
+                })
+
+if sueoki_data:
+    sueoki_df = pd.DataFrame(sueoki_data)
+    total_pairs = len(sueoki_df)
+    sueoki_count = len(sueoki_df[sueoki_df["据え置き"] == "○"])
+    sueoki_rate = sueoki_count / total_pairs * 100 if total_pairs > 0 else 0
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("据え置き率", f"{sueoki_rate:.1f}%")
+    with col2:
+        st.metric("据え置き回数", f"{sueoki_count}/{total_pairs}")
+    with col3:
+        if sueoki_rate >= 30:
+            st.success("据え置き傾向あり → 前日高設定台を狙え！")
+        elif sueoki_rate >= 15:
+            st.info("据え置きは時々ある")
+        else:
+            st.warning("据え置き少ない → 前日高設定台は避けるべき")
+
+    # 機種別据え置き率
+    st.markdown("#### 機種別 据え置き率")
+    machine_sueoki = sueoki_df.groupby("機種").agg(
+        件数=("据え置き", "count"),
+        据え置き=("据え置き", lambda x: (x == "○").sum()),
+    ).reset_index()
+    machine_sueoki["据え置き率"] = (machine_sueoki["据え置き"] / machine_sueoki["件数"] * 100).apply(lambda x: f"{x:.0f}%")
+    st.dataframe(machine_sueoki, use_container_width=True, hide_index=True)
+else:
+    st.info("連続日のデータが溜まると据え置き分析が表示されます。")
+
+# =============================================
+# ★★★ 隣接台分析（並び狙い） ★★★
+# =============================================
+st.markdown("---")
+st.header("🏗️ 並び・固まり傾向（高設定が隣接するか）")
+st.caption("同じ日に高設定が隣り合って入る傾向があるか → 並び狙いの判断材料")
+
+adjacent_count = 0
+adjacent_total = 0
+for date in sorted_dates:
+    for machine in df["machine_name"].unique():
+        day_machine = df[
+            (df["play_date"] == date) &
+            (df["machine_name"] == machine) &
+            (df["estimated_setting"] >= 4)
+        ]["unit_number"].dropna().sort_values().tolist()
+
+        if len(day_machine) < 2:
+            continue
+
+        for i in range(len(day_machine) - 1):
+            adjacent_total += 1
+            try:
+                if abs(int(day_machine[i+1]) - int(day_machine[i])) == 1:
+                    adjacent_count += 1
+            except (ValueError, TypeError):
+                pass
+
+if adjacent_total > 0:
+    adj_rate = adjacent_count / adjacent_total * 100
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("高設定の隣接率", f"{adj_rate:.1f}%",
+                   help="高設定台同士が台番号で隣り合っている割合")
+    with col2:
+        if adj_rate >= 30:
+            st.success("並び傾向あり！高設定台の隣も狙い目")
+        elif adj_rate >= 15:
+            st.info("並びは時々ある")
+        else:
+            st.caption("並び傾向は薄い → バラけて入る店")
+else:
+    st.info("データが溜まると並び分析が表示されます。")
+
+# =============================================
+# ★★★ 角台・端台分析 ★★★
+# =============================================
+st.markdown("---")
+st.header("📐 角台（端台）の優遇傾向")
+st.caption("各機種の一番端の台（角台）は高設定が入りやすいか")
+
+kado_stats = {"角台": {"total": 0, "high": 0}, "中間台": {"total": 0, "high": 0}}
+for date in sorted_dates:
+    for machine in df["machine_name"].unique():
+        day_machine = df[
+            (df["play_date"] == date) &
+            (df["machine_name"] == machine)
+        ].dropna(subset=["unit_number", "estimated_setting"])
+
+        if len(day_machine) < 3:
+            continue
+
+        units_sorted = day_machine.sort_values("unit_number")
+        min_unit = units_sorted["unit_number"].min()
+        max_unit = units_sorted["unit_number"].max()
+
+        for _, row in units_sorted.iterrows():
+            unit = row["unit_number"]
+            setting = row["estimated_setting"]
+            is_kado = (unit == min_unit or unit == max_unit)
+            key = "角台" if is_kado else "中間台"
+            kado_stats[key]["total"] += 1
+            if setting >= 4:
+                kado_stats[key]["high"] += 1
+
+if kado_stats["角台"]["total"] > 0 and kado_stats["中間台"]["total"] > 0:
+    kado_rate = kado_stats["角台"]["high"] / kado_stats["角台"]["total"] * 100
+    naka_rate = kado_stats["中間台"]["high"] / kado_stats["中間台"]["total"] * 100
+    diff_kado = kado_rate - naka_rate
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("角台の高設定率", f"{kado_rate:.1f}%",
+                   delta=f"{diff_kado:+.1f}%")
+    with col2:
+        st.metric("中間台の高設定率", f"{naka_rate:.1f}%")
+    with col3:
+        if diff_kado > 5:
+            st.success("角台が優遇されている！")
+        elif diff_kado > 0:
+            st.info("角台がやや有利")
+        else:
+            st.warning("角台の優遇なし")
+else:
+    st.info("データが溜まると角台分析が表示されます。")
+
+# =============================================
+# ★★★ 店の出玉傾向（全体トレンド） ★★★
+# =============================================
+st.markdown("---")
+st.header("📈 店全体の出玉トレンド")
+st.caption("日ごとの高設定投入率の推移 → 店が出す時期・渋い時期を見極める")
+
+daily_trend = []
+for date in sorted_dates:
+    day_df = df[df["play_date"] == date]
+    settings = day_df["estimated_setting"].dropna()
+    if len(settings) == 0:
+        continue
+    high_rate = (settings >= 4).mean() * 100
+    avg_diff = day_df["estimated_diff"].dropna().mean()
+    daily_trend.append({
+        "日付": date,
+        "高設定率": round(high_rate, 1),
+        "平均差枚": round(avg_diff) if pd.notna(avg_diff) else 0,
+        "台数": len(settings),
+    })
+
+if daily_trend:
+    trend_df = pd.DataFrame(daily_trend)
+    st.line_chart(trend_df.set_index("日付")["高設定率"], use_container_width=True)
+
+    # 直近の傾向
+    if len(daily_trend) >= 5:
+        recent_5 = trend_df.tail(5)["高設定率"].mean()
+        older = trend_df.head(len(trend_df) - 5)["高設定率"].mean()
+        diff_trend = recent_5 - older
+
+        if diff_trend > 3:
+            st.success(f"直近5日間の高設定率が上昇傾向（+{diff_trend:.1f}%）→ 今が攻め時！")
+        elif diff_trend < -3:
+            st.warning(f"直近5日間の高設定率が下降傾向（{diff_trend:.1f}%）→ 様子見推奨")
+        else:
+            st.info(f"直近5日間は安定推移（{diff_trend:+.1f}%）")
+
+    # 差枚トレンド
+    st.markdown("#### 日別 平均差枚推移")
+    st.bar_chart(trend_df.set_index("日付")["平均差枚"], use_container_width=True)
+else:
+    st.info("データが溜まるとトレンドが表示されます。")
+
+# =============================================
+# ★★★ 期待収支シミュレーション ★★★
+# =============================================
+st.markdown("---")
+st.header("💰 期待収支シミュレーション")
+st.caption("狙い台に座れた場合の期待収支（過去の差枚データから算出）")
+
+if unit_ranking:
+    top_target = unit_ranking[:5]
+    sim_data = []
+    for u in top_target:
+        machine = u["機種"]
+        unit = u["台番号"]
+        target_data = df[
+            (df["machine_name"] == machine) &
+            (df["unit_number"] == unit) &
+            (df["estimated_setting"] >= 4)
+        ]["estimated_diff"].dropna()
+
+        if len(target_data) > 0:
+            avg_diff = target_data.mean()
+            sim_data.append({
+                "機種": machine,
+                "台番号": unit,
+                "高設定時の平均差枚": f"{avg_diff:+,.0f}枚",
+                "期待収支(20円換算)": f"¥{avg_diff * 20:+,.0f}",
+                "高設定回数": len(target_data),
+            })
+
+    if sim_data:
+        st.dataframe(pd.DataFrame(sim_data), use_container_width=True, hide_index=True)
+
+        total_avg = df[df["estimated_setting"] >= 4]["estimated_diff"].dropna().mean()
+        if pd.notna(total_avg):
+            st.info(f"高設定台全体の平均差枚: **{total_avg:+,.0f}枚**（20円換算: **¥{total_avg*20:+,.0f}**）")
+
 st.markdown("---")
 st.caption("※ 高設定 = 推定設定4以上。n数が少ない場合は信頼性が低いので注意。データが2〜3週間溜まると精度が上がります。")
