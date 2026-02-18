@@ -191,9 +191,14 @@ with col2:
     st.markdown("### 旧イベント日（7のつく日）")
 
     df_copy = df.copy()
-    df_copy["is_event"] = df_copy["play_date"].apply(
-        lambda x: int(x.split("-")[2]) in (7, 17, 27) if isinstance(x, str) else False
-    )
+    def _is_event(x):
+        try:
+            parts = str(x).split("-")
+            return int(parts[2]) in (7, 17, 27) if len(parts) >= 3 else False
+        except (ValueError, IndexError):
+            return False
+
+    df_copy["is_event"] = df_copy["play_date"].apply(_is_event)
     event_settings = df_copy[df_copy["is_event"]]["estimated_setting"].dropna()
     normal_settings = df_copy[~df_copy["is_event"]]["estimated_setting"].dropna()
 
