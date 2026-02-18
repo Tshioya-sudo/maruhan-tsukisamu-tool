@@ -105,7 +105,10 @@ for row in all_dicts:
     date = row.get("play_date", "")
     if unit is None or setting is None:
         continue
-    key = (machine, int(unit))
+    try:
+        key = (machine, int(unit))
+    except (ValueError, TypeError):
+        continue
     unit_stats[key]["total"] += 1
     unit_stats[key]["machine"] = machine
     if setting >= 4:
@@ -237,7 +240,10 @@ for row in all_dicts:
     setting = row.get("estimated_setting")
     if dow is None or suffix is None or setting is None:
         continue
-    key = (int(dow), int(suffix))
+    try:
+        key = (int(dow), int(suffix))
+    except (ValueError, TypeError):
+        continue
     cross[key]["total"] += 1
     if setting >= 4:
         cross[key]["high"] += 1
