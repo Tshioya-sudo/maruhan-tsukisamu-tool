@@ -5,10 +5,16 @@
 import sys
 import os
 import io
+from pathlib import Path
+
+_root = Path(__file__).resolve().parent.parent.parent
+_site_packages = _root.parent / "Lib" / "site-packages"
+if _site_packages.exists():
+    sys.path.insert(0, str(_site_packages))
+sys.path.insert(0, str(_root))
+
 import streamlit as st
 import pandas as pd
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from scraper.sheets import SheetsManager
 
@@ -28,6 +34,20 @@ try:
 except Exception as e:
     st.error(f"データ読み込みエラー: {e}")
     st.stop()
+
+if df.empty:
+    st.warning("データがありません。")
+    st.stop()
+
+# カラム名の互換対応
+COLUMN_MAP = {
+    "日付": "play_date", "機種名": "machine_name", "台番号": "unit_number",
+    "総G数": "total_games", "BB回数": "bb_count", "RB回数": "rb_count",
+    "合算確率": "combined_prob", "BB率": "bb_prob", "RB率": "rb_prob",
+    "推定設定": "estimated_setting", "信頼度": "setting_confidence",
+    "推定差枚": "estimated_diff", "曜日": "day_of_week", "台番末尾": "unit_suffix",
+}
+df = df.rename(columns=COLUMN_MAP)
 
 if df.empty:
     st.warning("データがありません。")
