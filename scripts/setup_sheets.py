@@ -22,23 +22,23 @@ from scraper.sheets import SheetsManager
 # 各シートのヘッダー定義
 SHEET_HEADERS = {
     "daily_data": [
-        "play_date", "machine_name", "unit_number", "total_games",
-        "bb_count", "rb_count", "combined_prob", "bb_prob", "rb_prob",
-        "estimated_setting", "setting_confidence", "estimated_diff",
-        "day_of_week", "unit_suffix",
+        "日付", "機種名", "台番号", "総G数",
+        "BB回数", "RB回数", "合算確率", "BB率", "RB率",
+        "推定設定", "信頼度", "推定差枚",
+        "曜日", "台番末尾",
     ],
     "daily_summary": [
-        "play_date", "avg_games", "total_units", "high_setting_count",
-        "featured_machines", "featured_suffixes", "day_of_week",
+        "日付", "平均G数", "取得台数", "高設定台数",
+        "好調機種", "好調末尾", "曜日",
     ],
     "scrape_log": [
-        "scrape_datetime", "target_date", "status",
-        "units_count", "error_message", "duration_sec",
+        "実行日時", "対象日", "ステータス",
+        "取得台数", "エラー内容", "処理時間(秒)",
     ],
     "machines": [
-        "machine_name", "machine_type", "maker",
-        "setting1_payout", "setting6_payout",
-        "setting1_reg", "setting6_reg",
+        "機種名", "タイプ", "メーカー",
+        "設定1機械割", "設定6機械割",
+        "設定1REG確率", "設定6REG確率",
     ],
 }
 
