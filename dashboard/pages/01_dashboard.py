@@ -111,6 +111,205 @@ st.caption(f"データ: {df['play_date'].min()} 〜 {latest_date}（{total_days}
 
 all_dicts = df.to_dict("records")
 
+today = datetime.now()
+today_name = DAY_NAMES[today.weekday()]
+today_date = today.strftime("%Y-%m-%d")
+today_day = today.day
+sorted_dates = sorted(df["play_date"].dropna().unique())
+
+# =============================================
+# ★★★ 今日のアクションプラン ★★★
+# =============================================
+st.markdown("---")
+st.header("🚀 今日のアクションプラン")
+st.caption(f"{today.strftime('%m/%d')}（{today_name}）— ページを開いたらまずここを見る")
+
+# --- 事前計算: 今日の曜日の高設定率 ---
+dow_data_pre = analyze_day_of_week_patterns(all_dicts)
+today_dow_info = dow_data_pre.get(today_name, {"total": 0, "rate": 0})
+today_dow_rate = today_dow_info["rate"] * 100
+dow_ranked_pre = sorted(
+    [(d, info) for d, info in dow_data_pre.items() if info["total"] > 0],
+    key=lambda x: x[1]["rate"], reverse=True
+)
+today_dow_rank = next((i + 1 for i, (d, _) in enumerate(dow_ranked_pre) if d == today_name), None)
+
+# --- 事前計算: 今日がイベント日か ---
+is_today_event = today_day in (7, 17, 27)
+
+# --- 事前計算: 今日の最強末尾 ---
+cross_pre = defaultdict(lambda: {"total": 0, "high": 0})
+for row in all_dicts:
+    _dow = row.get("day_of_week")
+    _suf = row.get("unit_suffix")
+    _set = row.get("estimated_setting")
+    if _dow is None or _suf is None or _set is None:
+        continue
+    try:
+        cross_pre[(int(_dow), int(_suf))]["total"] += 1
+        if _set >= 4:
+            cross_pre[(int(_dow), int(_suf))]["high"] += 1
+    except (ValueError, TypeError):
+        pass
+
+today_suffix_ranked = []
+for suffix in range(10):
+    info = cross_pre.get((today.weekday(), suffix), {"total": 0, "high": 0})
+    if info["total"] >= 2 and info["high"] > 0:
+        today_suffix_ranked.append((suffix, info["high"] / info["total"] * 100, info["total"]))
+today_suffix_ranked.sort(key=lambda x: -x[1])
+
+# --- 事前計算: 高設定台ランキング（直近重み付き） ---
+unit_stats_pre = defaultdict(lambda: {"high": 0, "total": 0, "recent_high": 0, "machine": "", "dates": []})
+recent_cutoff = sorted_dates[-7:] if len(sorted_dates) >= 7 else sorted_dates
+for row in all_dicts:
+    machine = row.get("machine_name", "")
+    unit = row.get("unit_number")
+    setting = row.get("estimated_setting")
+    date = row.get("play_date", "")
+    if unit is None or setting is None:
+        continue
+    try:
+        key = (machine, int(unit))
+    except (ValueError, TypeError):
+        continue
+    unit_stats_pre[key]["total"] += 1
+    unit_stats_pre[key]["machine"] = machine
+    if setting >= 4:
+        unit_stats_pre[key]["high"] += 1
+        unit_stats_pre[key]["dates"].append(date)
+        if date in recent_cutoff:
+            unit_stats_pre[key]["recent_high"] += 1
+
+# 直近重み付きスコア（直近高設定×2 + 全期間高設定）
+top_units_action = []
+for (machine, unit), stats in unit_stats_pre.items():
+    if stats["total"] >= 3 and stats["high"] >= 1:
+        score = stats["recent_high"] * 2 + stats["high"]
+        rate = stats["high"] / stats["total"]
+        top_units_action.append({
+            "machine": machine, "unit": unit, "score": score,
+            "rate": rate, "high": stats["high"], "total": stats["total"],
+            "recent": stats["recent_high"],
+        })
+top_units_action.sort(key=lambda x: (-x["score"], -x["rate"]))
+
+# --- 事前計算: 据え置き候補（前日高設定台） ---
+sueoki_candidates = []
+if sorted_dates:
+    last_date = sorted_dates[-1]
+    last_day_high = df[
+        (df["play_date"] == last_date) & (df["estimated_setting"] >= 4)
+    ][["machine_name", "unit_number", "estimated_setting"]].dropna()
+    for _, row in last_day_high.iterrows():
+        sueoki_candidates.append({
+            "machine": row["machine_name"],
+            "unit": int(row["unit_number"]),
+            "setting": int(row["estimated_setting"]),
+        })
+
+# --- 事前計算: 店のトレンド ---
+trend_direction = "不明"
+if len(sorted_dates) >= 5:
+    recent_rates = []
+    older_rates = []
+    for i, date in enumerate(sorted_dates):
+        day_settings = df[df["play_date"] == date]["estimated_setting"].dropna()
+        if len(day_settings) == 0:
+            continue
+        rate = (day_settings >= 4).mean() * 100
+        if i >= len(sorted_dates) - 5:
+            recent_rates.append(rate)
+        else:
+            older_rates.append(rate)
+    if recent_rates and older_rates:
+        diff_t = sum(recent_rates) / len(recent_rates) - sum(older_rates) / len(older_rates)
+        if diff_t > 3:
+            trend_direction = "上昇"
+        elif diff_t < -3:
+            trend_direction = "下降"
+        else:
+            trend_direction = "安定"
+
+# --- アクションプラン表示 ---
+# 総合判定
+go_score = 0
+reasons_go = []
+reasons_wait = []
+
+if today_dow_rank and today_dow_rank <= 3:
+    go_score += 2
+    reasons_go.append(f"{today_name}曜日は高設定率ランキング**{today_dow_rank}位**（{today_dow_rate:.1f}%）")
+elif today_dow_rank and today_dow_rank >= 5:
+    go_score -= 1
+    reasons_wait.append(f"{today_name}曜日は高設定率ランキング{today_dow_rank}位（低め）")
+
+if is_today_event:
+    go_score += 2
+    reasons_go.append("今日は**旧イベント日（7のつく日）**")
+
+if trend_direction == "上昇":
+    go_score += 1
+    reasons_go.append("直近の店全体トレンドが**上昇中**")
+elif trend_direction == "下降":
+    go_score -= 1
+    reasons_wait.append("直近の店全体トレンドが下降中")
+
+if top_units_action:
+    go_score += 1
+    reasons_go.append(f"狙える高設定候補台が**{len(top_units_action[:5])}台**ある")
+
+# 判定結果
+if go_score >= 3:
+    verdict = "🟢 今日は行くべき！"
+    verdict_color = "success"
+elif go_score >= 1:
+    verdict = "🟡 行ってもいい（条件付き）"
+    verdict_color = "info"
+else:
+    verdict = "🔴 今日は様子見が無難"
+    verdict_color = "warning"
+
+getattr(st, verdict_color)(f"### {verdict}")
+
+col_go, col_wait = st.columns(2)
+with col_go:
+    if reasons_go:
+        st.markdown("**行くべき理由:**")
+        for r in reasons_go:
+            st.markdown(f"- ✅ {r}")
+with col_wait:
+    if reasons_wait:
+        st.markdown("**注意点:**")
+        for r in reasons_wait:
+            st.markdown(f"- ⚠️ {r}")
+
+# 狙い台の具体的指示
+st.markdown("---")
+st.markdown("### 🎯 今日座るならこの台")
+
+if top_units_action:
+    action_cols = st.columns(min(len(top_units_action[:3]), 3))
+    for i, u in enumerate(top_units_action[:3]):
+        with action_cols[i]:
+            medal = ["🥇", "🥈", "🥉"][i]
+            st.markdown(f"#### {medal} 第{i+1}候補")
+            st.markdown(f"**{u['machine']}**")
+            st.markdown(f"台番号: **{u['unit']}**")
+            st.markdown(f"高設定率: {u['rate']:.0%}（{u['total']}日中{u['high']}回）")
+            if u["recent"] > 0:
+                st.markdown(f"直近7日: **{u['recent']}回** 高設定 🔥")
+
+if today_suffix_ranked:
+    top_suffixes = today_suffix_ranked[:3]
+    suffix_text = "、".join([f"**末尾{s}**({r:.0f}%)" for s, r, _ in top_suffixes])
+    st.info(f"今日（{today_name}曜日）の狙い末尾: {suffix_text}")
+
+if sueoki_candidates:
+    with st.expander(f"📋 据え置き候補（前日 {sorted_dates[-1]} の高設定台）— {len(sueoki_candidates)}台"):
+        for c in sueoki_candidates[:10]:
+            st.markdown(f"- {c['machine']} 台番**{c['unit']}** （前日推定設定{c['setting']}）")
+
 # =============================================
 # ★★★ 具体的な狙い台リスト ★★★
 # =============================================
@@ -176,9 +375,6 @@ else:
 # =============================================
 st.markdown("---")
 st.header("📅 次に行くべき日")
-
-today = datetime.now()
-today_name = DAY_NAMES[today.weekday()]
 
 # 曜日別分析
 dow_data = analyze_day_of_week_patterns(all_dicts)
@@ -359,8 +555,6 @@ st.markdown("---")
 st.header("🔄 据え置き・設定変更パターン")
 st.caption("前日高設定だった台が翌日どうなったか → 据え置き狙いの判断材料")
 
-# 日付をソートして前日→翌日のペアを作る
-sorted_dates = sorted(df["play_date"].dropna().unique())
 sueoki_data = []
 for i in range(len(sorted_dates) - 1):
     date_prev = sorted_dates[i]
@@ -599,6 +793,100 @@ if unit_ranking:
         total_avg = df[df["estimated_setting"] >= 4]["estimated_diff"].dropna().mean()
         if pd.notna(total_avg):
             st.info(f"高設定台全体の平均差枚: **{total_avg:+,.0f}枚**（20円換算: **¥{total_avg*20:+,.0f}**）")
+
+# =============================================
+# ★★★ G数（回転数）と設定の相関 ★★★
+# =============================================
+st.markdown("---")
+st.header("🎮 回転数（G数）と高設定の関係")
+st.caption("G数が多い台＝客が粘っている＝出ている可能性。何G以上なら高設定の確率が高いか")
+
+games_thresholds = [3000, 4000, 5000, 6000, 7000, 8000]
+games_analysis = []
+valid_games = df.dropna(subset=["total_games", "estimated_setting"])
+
+for threshold in games_thresholds:
+    above = valid_games[valid_games["total_games"] >= threshold]
+    below = valid_games[valid_games["total_games"] < threshold]
+    if len(above) > 0:
+        above_rate = (above["estimated_setting"] >= 4).mean() * 100
+        below_rate = (below["estimated_setting"] >= 4).mean() * 100 if len(below) > 0 else 0
+        games_analysis.append({
+            "G数閾値": f"{threshold:,}G以上",
+            "該当台数": len(above),
+            "高設定率": f"{above_rate:.1f}%",
+            "それ以下の高設定率": f"{below_rate:.1f}%",
+            "差": f"+{above_rate - below_rate:.1f}%",
+        })
+
+if games_analysis:
+    st.dataframe(pd.DataFrame(games_analysis), use_container_width=True, hide_index=True)
+
+    # 最も差が大きい閾値を推薦
+    best_threshold = None
+    best_diff = 0
+    for threshold in games_thresholds:
+        above = valid_games[valid_games["total_games"] >= threshold]
+        below = valid_games[valid_games["total_games"] < threshold]
+        if len(above) >= 10:
+            above_rate = (above["estimated_setting"] >= 4).mean() * 100
+            below_rate = (below["estimated_setting"] >= 4).mean() * 100 if len(below) > 0 else 0
+            d = above_rate - below_rate
+            if d > best_diff:
+                best_diff = d
+                best_threshold = threshold
+
+    if best_threshold and best_diff > 3:
+        st.success(
+            f"**{best_threshold:,}G以上** の台は高設定率が **+{best_diff:.1f}%** 高い → "
+            f"夕方から打つなら{best_threshold:,}G以上回っている台を狙え！"
+        )
+else:
+    st.info("データが溜まるとG数分析が表示されます。")
+
+# =============================================
+# ★★★ 月初・月末・給料日傾向 ★★★
+# =============================================
+st.markdown("---")
+st.header("📆 月の時期による傾向")
+st.caption("月初（1〜10日）・中旬（11〜20日）・月末（21〜末日）で高設定率に差があるか")
+
+period_stats = {"月初(1-10日)": {"total": 0, "high": 0},
+                "中旬(11-20日)": {"total": 0, "high": 0},
+                "月末(21-末日)": {"total": 0, "high": 0}}
+
+for _, row in df.dropna(subset=["estimated_setting"]).iterrows():
+    try:
+        day_num = int(str(row["play_date"]).split("-")[2])
+    except (ValueError, IndexError):
+        continue
+    if day_num <= 10:
+        period = "月初(1-10日)"
+    elif day_num <= 20:
+        period = "中旬(11-20日)"
+    else:
+        period = "月末(21-末日)"
+    period_stats[period]["total"] += 1
+    if row["estimated_setting"] >= 4:
+        period_stats[period]["high"] += 1
+
+period_data = []
+for period, stats in period_stats.items():
+    if stats["total"] > 0:
+        rate = stats["high"] / stats["total"] * 100
+        period_data.append({"時期": period, "高設定率": f"{rate:.1f}%", "データ数": stats["total"]})
+
+if period_data:
+    pcols = st.columns(len(period_data))
+    for i, pd_item in enumerate(period_data):
+        with pcols[i]:
+            st.metric(pd_item["時期"], pd_item["高設定率"], help=f"n={pd_item['データ数']}")
+
+    # 最も高い時期を強調
+    best_period = max(period_stats.items(), key=lambda x: x[1]["high"] / x[1]["total"] if x[1]["total"] > 0 else 0)
+    if best_period[1]["total"] > 0:
+        best_rate = best_period[1]["high"] / best_period[1]["total"] * 100
+        st.info(f"最も高設定が入りやすい時期: **{best_period[0]}**（高設定率 {best_rate:.1f}%）")
 
 st.markdown("---")
 st.caption("※ 高設定 = 推定設定4以上。n数が少ない場合は信頼性が低いので注意。データが2〜3週間溜まると精度が上がります。")
