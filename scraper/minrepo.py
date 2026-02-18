@@ -17,6 +17,7 @@ import unicodedata
 from scraper.parser import (
     parse_int,
     parse_prob,
+    parse_payout_rate,
     parse_date_text,
     extract_article_id,
     extract_kishu_name,
@@ -240,7 +241,9 @@ class MinRepoScraper:
                                     "play_date": target_date,
                                     "machine_name": machine_name,
                                     "unit_number": unit_num,
+                                    "diff_medals": parse_int(cells[1].inner_text()),
                                     "total_games": parse_int(cells[2].inner_text()),
+                                    "payout_rate": parse_payout_rate(cells[3].inner_text()),
                                     "bb_count": parse_int(cells[4].inner_text()),
                                     "rb_count": parse_int(cells[5].inner_text()),
                                     "combined_prob": parse_prob(cells[6].inner_text()),

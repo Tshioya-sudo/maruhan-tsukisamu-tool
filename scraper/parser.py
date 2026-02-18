@@ -29,6 +29,19 @@ def parse_int(text: str) -> int | None:
         return None
 
 
+def parse_payout_rate(text: str) -> float | None:
+    """'109.5%' → 109.5, '-' → None"""
+    if text is None:
+        return None
+    try:
+        cleaned = text.strip().replace("%", "").replace(",", "")
+        if cleaned in ("", "-"):
+            return None
+        return float(cleaned)
+    except (ValueError, AttributeError):
+        return None
+
+
 def parse_prob(text: str) -> float | None:
     """'1/221' → 221.0, '-' → None"""
     if text is None:

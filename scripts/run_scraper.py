@@ -162,7 +162,11 @@ def main():
                 )
                 row["estimated_setting"] = result["estimated_setting"]
                 row["setting_confidence"] = result["confidence"]
-                row["estimated_diff"] = calc_diff(row)
+                # みんレポから取得した実際の差枚を優先、なければ計算
+                if row.get("diff_medals") is not None:
+                    row["estimated_diff"] = row["diff_medals"]
+                else:
+                    row["estimated_diff"] = calc_diff(row)
                 row["day_of_week"] = get_day_of_week(target_date)
                 row["unit_suffix"] = (
                     row["unit_number"] % 10 if row["unit_number"] else None

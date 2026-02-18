@@ -59,14 +59,35 @@ COLUMN_MAP = {
     "合算確率": "combined_prob", "BB率": "bb_prob", "RB率": "rb_prob",
     "推定設定": "estimated_setting", "信頼度": "setting_confidence",
     "推定差枚": "estimated_diff", "曜日": "day_of_week", "台番末尾": "unit_suffix",
+    "出率": "payout_rate",
 }
 df = df.rename(columns=COLUMN_MAP)
 
 for col in ["estimated_setting", "total_games", "bb_count", "rb_count",
             "combined_prob", "bb_prob", "rb_prob", "unit_number",
-            "setting_confidence", "estimated_diff", "day_of_week", "unit_suffix"]:
+            "setting_confidence", "estimated_diff", "day_of_week", "unit_suffix",
+            "payout_rate"]:
     if col in df.columns:
         df[col] = pd.to_numeric(df[col], errors="coerce")
+
+# 差枚修正: 出率がある場合はそこから正確に再計算
+# 出率がない旧データは旧式が壊れているので、ボーナス+小役の概算で補正
+if "payout_rate" in df.columns:
+    mask_rate = df["payout_rate"].notna() & df["total_games"].notna()
+    df.loc[mask_rate, "estimated_diff"] = (
+        (df.loc[mask_rate, "payout_rate"] / 100 - 1) * df.loc[mask_rate, "total_games"] * 3
+    ).round(0)
+
+# 出率がない旧データの差枚を補正（ジャグラー小役払出≒G数×2.1枚を加算）
+mask_old = df["estimated_diff"].notna() & df["total_games"].notna()
+if "payout_rate" in df.columns:
+    mask_old = mask_old & df["payout_rate"].isna()
+# 旧式: BB*312+RB*104-G*3 → 正しくは小役(ぶどう等)の払出が抜けている
+# 補正: G数*2.1を加算（ジャグラーの通常時小役期待値≒約2.1枚/G）
+if mask_old.any():
+    df.loc[mask_old, "estimated_diff"] = (
+        df.loc[mask_old, "estimated_diff"] + df.loc[mask_old, "total_games"] * 2.1
+    ).round(0)
 
 
 def is_event_day_date(d):

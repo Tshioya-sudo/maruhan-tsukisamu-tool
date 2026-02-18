@@ -89,6 +89,7 @@ class SheetsManager:
                 r.get("estimated_diff"),
                 r.get("day_of_week"),
                 r.get("unit_suffix"),
+                r.get("payout_rate"),
             ])
         if values:
             # append_rows（複数形）を使用。append_row（単数形）は1行ずつAPIコールになるため禁止。

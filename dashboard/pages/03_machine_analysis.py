@@ -54,6 +54,7 @@ COLUMN_MAP = {
     "合算確率": "combined_prob", "BB率": "bb_prob", "RB率": "rb_prob",
     "推定設定": "estimated_setting", "信頼度": "setting_confidence",
     "推定差枚": "estimated_diff", "曜日": "day_of_week", "台番末尾": "unit_suffix",
+    "出率": "payout_rate",
 }
 df = df.rename(columns=COLUMN_MAP)
 
