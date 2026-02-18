@@ -1,0 +1,93 @@
+{
+  "machines": [
+    {
+      "machine_name": "マイジャグラーV",
+      "machine_type": "juggler",
+      "maker": "北電子",
+      "unit_count": 40,
+      "settings": {
+        "1": {"big": 273.1, "reg": 409.6, "payout": 97.0},
+        "2": {"big": 270.8, "reg": 385.5, "payout": 98.0},
+        "3": {"big": 266.4, "reg": 336.1, "payout": 100.0},
+        "4": {"big": 254.0, "reg": 290.0, "payout": 103.0},
+        "5": {"big": 240.1, "reg": 268.6, "payout": 106.0},
+        "6": {"big": 229.1, "reg": 229.1, "payout": 109.4}
+      }
+    },
+    {
+      "machine_name": "ゴーゴージャグラー３",
+      "note": "３は全角",
+      "machine_type": "juggler",
+      "maker": "北電子",
+      "unit_count": 22,
+      "settings": {
+        "1": {"big": 264.3, "reg": 397.2, "payout": 97.6},
+        "2": {"big": 264.3, "reg": 356.2, "payout": 98.9},
+        "3": {"big": 264.3, "reg": 304.8, "payout": 100.8},
+        "4": {"big": 252.1, "reg": 284.9, "payout": 103.0},
+        "5": {"big": 240.9, "reg": 256.0, "payout": 106.0},
+        "6": {"big": 229.1, "reg": 229.1, "payout": 109.8}
+      }
+    },
+    {
+      "machine_name": "ネオアイムジャグラーEX",
+      "note": "EXは半角。SアイムジャグラーＥＸ（全角）とは別機種",
+      "machine_type": "juggler",
+      "maker": "北電子",
+      "unit_count": 24,
+      "settings": {
+        "1": {"big": 268.6, "reg": 409.6, "payout": 97.5},
+        "2": {"big": 266.4, "reg": 399.6, "payout": 98.6},
+        "3": {"big": 266.4, "reg": 331.0, "payout": 100.1},
+        "4": {"big": 254.0, "reg": 290.0, "payout": 102.0},
+        "5": {"big": 254.0, "reg": 268.6, "payout": 104.2},
+        "6": {"big": 229.1, "reg": 229.1, "payout": 109.4}
+      }
+    },
+    {
+      "machine_name": "SアイムジャグラーＥＸ",
+      "note": "ＥＸは全角",
+      "machine_type": "juggler",
+      "maker": "北電子",
+      "unit_count": 12,
+      "settings": {
+        "1": {"big": 268.6, "reg": 409.6, "payout": 97.5},
+        "2": {"big": 266.4, "reg": 399.6, "payout": 98.6},
+        "3": {"big": 266.4, "reg": 331.0, "payout": 100.1},
+        "4": {"big": 254.0, "reg": 290.0, "payout": 102.0},
+        "5": {"big": 254.0, "reg": 268.6, "payout": 104.2},
+        "6": {"big": 229.1, "reg": 229.1, "payout": 109.4}
+      }
+    },
+    {
+      "machine_name": "スマスロ 沖ドキ!DUO アンコール",
+      "note": "「スマスロ 」接頭辞・スペースあり",
+      "machine_type": "at",
+      "maker": "ユニバーサル",
+      "unit_count": 36,
+      "settings": {
+        "1": {"first_hit": 319.7, "payout": 98.6},
+        "2": {"first_hit": 295.6, "payout": 100.2},
+        "3": {"first_hit": 270.8, "payout": 103.5},
+        "4": {"first_hit": 237.4, "payout": 107.0},
+        "5": {"first_hit": 211.4, "payout": 110.0},
+        "6": {"first_hit": 188.6, "payout": 112.0}
+      }
+    },
+    {
+      "machine_name": "ウルトラミラクルジャグラー",
+      "machine_type": "juggler",
+      "maker": "北電子",
+      "unit_count": 6,
+      "note": "BIG偏向型。REG確率差が他ジャグラーより小さいため、合算確率を重視して設定推測する",
+      "settings": {
+        "1": {"big": 267.5, "reg": 425.6, "payout": 97.0},
+        "2": {"big": 261.1, "reg": 402.1, "payout": 98.1},
+        "3": {"big": 256.0, "reg": 350.5, "payout": 99.8},
+        "4": {"big": 242.7, "reg": 322.8, "payout": 102.1},
+        "5": {"big": 233.2, "reg": 297.9, "payout": 104.5},
+        "6": {"big": 216.3, "reg": 277.7, "payout": 108.1}
+      }
+    }
+  ]
+}

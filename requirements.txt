@@ -1,0 +1,15 @@
+# スクレイピング
+playwright>=1.40.0
+
+# Google Sheets連携
+gspread>=6.0.0
+google-auth>=2.25.0
+
+# データ処理
+pandas>=2.0.0
+numpy>=1.24.0
+
+# ダッシュボード（ローカル実行用）
+streamlit>=1.30.0
+plotly>=5.18.0
+openpyxl>=3.1.0
