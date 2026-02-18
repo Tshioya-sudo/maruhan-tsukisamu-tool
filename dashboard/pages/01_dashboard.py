@@ -1,10 +1,11 @@
 """
 分析ダッシュボード（狙い目特化版）
-一番上に「今日の狙い目」、下に根拠データを表示。
+具体的な台番号・日付・機種を提案する。
 """
 import sys
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
+from collections import defaultdict
 
 _root = Path(__file__).resolve().parent.parent.parent
 _site_packages = _root.parent / "Lib" / "site-packages"
@@ -25,6 +26,8 @@ from analysis.patterns import (
 
 st.set_page_config(page_title="マルハン月寒 狙い目", layout="wide")
 
+DAY_NAMES = ["月", "火", "水", "木", "金", "土", "日"]
+
 
 @st.cache_data(ttl=300)
 def load_data():
@@ -43,7 +46,6 @@ if df.empty:
     st.warning("データがありません。スクレイパーを実行してください。")
     st.stop()
 
-# カラム名の互換対応
 COLUMN_MAP = {
     "日付": "play_date", "機種名": "machine_name", "台番号": "unit_number",
     "総G数": "total_games", "BB回数": "bb_count", "RB回数": "rb_count",
@@ -59,204 +61,257 @@ for col in ["estimated_setting", "total_games", "bb_count", "rb_count",
     if col in df.columns:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-DAY_NAMES = ["月", "火", "水", "木", "金", "土", "日"]
+
+def is_event_day_date(d):
+    return d.day in (7, 17, 27)
 
 
-def is_event_day(date_str):
-    try:
-        return int(date_str.split("-")[2]) in (7, 17, 27)
-    except Exception:
-        return False
+def next_event_day():
+    today = datetime.now().date()
+    for i in range(1, 31):
+        d = today + timedelta(days=i)
+        if d.day in (7, 17, 27):
+            return d
+    return None
 
 
-# =============================================
-# ヘッダー
 # =============================================
 st.title("🎰 マルハン月寒 狙い目ダッシュボード")
-
 latest_date = df["play_date"].max()
 total_days = df["play_date"].nunique()
 st.caption(f"データ: {df['play_date'].min()} 〜 {latest_date}（{total_days}日分）")
 
-# =============================================
-# 1. 今日の狙い目（一番目立つ場所）
-# =============================================
-st.markdown("---")
-st.header("🔥 狙い目まとめ")
-
 all_dicts = df.to_dict("records")
 
-# 曜日分析
+# =============================================
+# ★★★ 具体的な狙い台リスト ★★★
+# =============================================
+st.markdown("---")
+st.header("🎯 次に座るべき台（具体的な台番号）")
+
+# 各台の高設定回数と直近の実績を計算
+unit_stats = defaultdict(lambda: {"high_count": 0, "total": 0, "dates": [], "machine": ""})
+for row in all_dicts:
+    machine = row.get("machine_name", "")
+    unit = row.get("unit_number")
+    setting = row.get("estimated_setting")
+    date = row.get("play_date", "")
+    if unit is None or setting is None:
+        continue
+    key = (machine, int(unit))
+    unit_stats[key]["total"] += 1
+    unit_stats[key]["machine"] = machine
+    if setting >= 4:
+        unit_stats[key]["high_count"] += 1
+        unit_stats[key]["dates"].append(date)
+
+# 高設定率が高い台をランキング（最低3回以上データがある台）
+unit_ranking = []
+for (machine, unit), stats in unit_stats.items():
+    if stats["total"] >= 3 and stats["high_count"] >= 1:
+        rate = stats["high_count"] / stats["total"]
+        unit_ranking.append({
+            "機種": machine,
+            "台番号": unit,
+            "高設定回数": stats["high_count"],
+            "データ日数": stats["total"],
+            "高設定率": rate,
+            "直近の高設定日": ", ".join(sorted(stats["dates"])[-3:]),
+        })
+
+unit_ranking.sort(key=lambda x: (-x["高設定率"], -x["高設定回数"]))
+
+if unit_ranking:
+    st.markdown("**過去データから高設定が入りやすい台番号（高設定率順）:**")
+    top_units = unit_ranking[:15]
+    display = pd.DataFrame(top_units)
+    display["高設定率"] = display["高設定率"].apply(lambda x: f"{x:.0%}")
+    st.dataframe(display, use_container_width=True, hide_index=True)
+
+    # トップ3を目立たせる
+    st.markdown("### 特に狙い目の台")
+    for i, u in enumerate(top_units[:3]):
+        medal = ["🥇", "🥈", "🥉"][i]
+        st.success(
+            f"{medal} **{u['機種']} 台番{u['台番号']}** — "
+            f"高設定率 {u['高設定率']} "
+            f"（{u['データ日数']}日中 {u['高設定回数']}回）"
+        )
+else:
+    st.info("データが溜まると具体的な台番号の推薦が表示されます（最低3日分必要）。")
+
+# =============================================
+# ★★★ 次に行くべき日 ★★★
+# =============================================
+st.markdown("---")
+st.header("📅 次に行くべき日")
+
+today = datetime.now()
+today_name = DAY_NAMES[today.weekday()]
+
+# 曜日別分析
 dow_data = analyze_day_of_week_patterns(all_dicts)
-today_dow = datetime.now().weekday()
-today_name = DAY_NAMES[today_dow]
-today_info = dow_data.get(today_name, {})
-today_rate = today_info.get("rate", 0) * 100
-
-# 末尾分析
-suffix_data = analyze_suffix_patterns(all_dicts)
-hot_suffixes = sorted(
-    [(s, d) for s, d in suffix_data.items() if d["total"] >= 5],
+dow_ranked = sorted(
+    [(d, info) for d, info in dow_data.items() if info["total"] > 0],
     key=lambda x: x[1]["rate"], reverse=True
 )
 
-# 機種分析
-machine_data = analyze_machine_patterns(all_dicts)
-hot_machines = sorted(
-    machine_data.items(),
-    key=lambda x: x[1]["rate"], reverse=True
-)
+# 次の旧イベント日
+next_event = next_event_day()
 
-# ホット台
-hot_units = find_hot_units(all_dicts, days=7, min_high_count=2)
-
-# --- 狙い目カード ---
-col1, col2, col3 = st.columns(3)
+col1, col2 = st.columns(2)
 
 with col1:
-    st.markdown("### 📅 狙い目の曜日")
-    # 全曜日をランク付け
-    dow_ranked = sorted(dow_data.items(), key=lambda x: x[1]["rate"], reverse=True)
+    st.markdown("### 曜日別ランキング")
     for i, (day, info) in enumerate(dow_ranked):
         rate = info["rate"] * 100
         n = info["total"]
-        if n == 0:
-            continue
-        if i == 0:
-            st.markdown(f"**🥇 {day}曜日 → {rate:.1f}%** (n={n})")
-        elif i == 1:
-            st.markdown(f"**🥈 {day}曜日 → {rate:.1f}%** (n={n})")
-        elif i == 2:
-            st.markdown(f"🥉 {day}曜日 → {rate:.1f}% (n={n})")
-        else:
-            st.caption(f"　{day}曜日 → {rate:.1f}% (n={n})")
+        medal = ["🥇", "🥈", "🥉"][i] if i < 3 else "　"
+        marker = " ← **今日**" if day == today_name else ""
+        st.markdown(f"{medal} **{day}曜日** → 高設定率 **{rate:.1f}%** (n={n}){marker}")
 
-    if today_rate > 0:
-        st.info(f"今日は **{today_name}曜日** → 高設定率 **{today_rate:.1f}%**")
+    if dow_ranked:
+        best_day = dow_ranked[0][0]
+        # 次にその曜日が来る日付を計算
+        best_dow_idx = DAY_NAMES.index(best_day)
+        days_ahead = (best_dow_idx - today.weekday()) % 7
+        if days_ahead == 0:
+            days_ahead = 7  # 今日がその曜日なら来週
+        next_best = today + timedelta(days=days_ahead)
+        st.info(f"次の{best_day}曜日 → **{next_best.strftime('%m/%d')}（{best_day}）**")
 
 with col2:
-    st.markdown("### 🔢 狙い目の末尾")
-    for i, (suffix, info) in enumerate(hot_suffixes[:5]):
-        rate = info["rate"] * 100
-        n = info["total"]
-        if i == 0:
-            st.markdown(f"**🥇 末尾{suffix} → {rate:.1f}%** (n={n})")
-        elif i == 1:
-            st.markdown(f"**🥈 末尾{suffix} → {rate:.1f}%** (n={n})")
-        elif i == 2:
-            st.markdown(f"🥉 末尾{suffix} → {rate:.1f}% (n={n})")
-        else:
-            st.caption(f"　末尾{suffix} → {rate:.1f}% (n={n})")
+    st.markdown("### 旧イベント日（7のつく日）")
 
-with col3:
-    st.markdown("### 🎰 狙い目の機種")
-    for i, (machine, info) in enumerate(hot_machines):
-        rate = info["rate"] * 100
-        n = info["total"]
-        if n == 0:
-            continue
-        short_name = machine[:10] + "..." if len(machine) > 10 else machine
-        if i == 0:
-            st.markdown(f"**🥇 {short_name} → {rate:.1f}%** (n={n})")
-        elif i == 1:
-            st.markdown(f"**🥈 {short_name} → {rate:.1f}%** (n={n})")
-        elif i == 2:
-            st.markdown(f"🥉 {short_name} → {rate:.1f}% (n={n})")
-        else:
-            st.caption(f"　{short_name} → {rate:.1f}% (n={n})")
+    df_copy = df.copy()
+    df_copy["is_event"] = df_copy["play_date"].apply(
+        lambda x: int(x.split("-")[2]) in (7, 17, 27) if isinstance(x, str) else False
+    )
+    event_settings = df_copy[df_copy["is_event"]]["estimated_setting"].dropna()
+    normal_settings = df_copy[~df_copy["is_event"]]["estimated_setting"].dropna()
 
-# =============================================
-# 2. リピート高設定台（ピンポイント狙い）
-# =============================================
-st.markdown("---")
-st.header("🎯 リピート高設定台（直近7日で2回以上）")
-
-if hot_units:
-    for unit in hot_units[:10]:
-        machine = unit["machine_name"]
-        num = unit["unit_number"]
-        count = unit["high_count"]
-        dates = ", ".join(unit["dates"])
-        st.markdown(
-            f"**{machine} 台番{num}** → 高設定 **{count}回** （{dates}）"
-        )
-else:
-    st.info("直近7日間でリピート高設定台はありません。データが溜まると表示されます。")
-
-# =============================================
-# 3. 旧イベント日分析（7のつく日）
-# =============================================
-st.markdown("---")
-st.header("📆 旧イベント日（7のつく日: 7日・17日・27日）")
-
-df_copy = df.copy()
-df_copy["is_event"] = df_copy["play_date"].apply(is_event_day)
-event_df = df_copy[df_copy["is_event"]]
-normal_df = df_copy[~df_copy["is_event"]]
-
-col_a, col_b = st.columns(2)
-
-with col_a:
-    event_settings = event_df["estimated_setting"].dropna()
     if len(event_settings) > 0:
         event_rate = (event_settings >= 4).mean() * 100
-        event_days = event_df["play_date"].nunique()
-        st.metric("旧イベント日の高設定率",
-                  f"{event_rate:.1f}%",
-                  help=f"{event_days}日分のデータ")
-    else:
-        st.metric("旧イベント日の高設定率", "データなし")
+        normal_rate = (normal_settings >= 4).mean() * 100 if len(normal_settings) > 0 else 0
+        diff = event_rate - normal_rate
 
-with col_b:
-    normal_settings = normal_df["estimated_setting"].dropna()
-    if len(normal_settings) > 0:
-        normal_rate = (normal_settings >= 4).mean() * 100
-        normal_days = normal_df["play_date"].nunique()
-        st.metric("通常日の高設定率",
-                  f"{normal_rate:.1f}%",
-                  help=f"{normal_days}日分のデータ")
-    else:
-        st.metric("通常日の高設定率", "データなし")
+        st.metric("旧イベント日の高設定率", f"{event_rate:.1f}%")
+        st.metric("通常日の高設定率", f"{normal_rate:.1f}%")
 
-if len(event_settings) > 0 and len(normal_settings) > 0:
-    diff = event_rate - normal_rate
-    if diff > 3:
-        st.success(f"旧イベント日は通常日より **+{diff:.1f}%** 高設定が多い → **狙い目！**")
-    elif diff > 0:
-        st.info(f"旧イベント日は通常日より +{diff:.1f}% 高い（微差）")
+        if diff > 3:
+            st.success(f"旧イベント日は **+{diff:.1f}%** → 狙い目！")
+        elif diff > 0:
+            st.info(f"旧イベント日は +{diff:.1f}%（微差）")
+        else:
+            st.warning(f"差なし or 通常日が高い（{diff:+.1f}%）")
     else:
-        st.warning(f"旧イベント日は通常日より {diff:.1f}%（差なし or 通常日の方が高い）")
+        st.info("旧イベント日のデータがまだありません。")
 
-    # 旧イベント日に強い末尾
-    if len(event_df) > 0:
-        event_suffix = analyze_suffix_patterns(event_df.to_dict("records"))
-        hot_event_suffix = sorted(
-            [(s, d) for s, d in event_suffix.items() if d["total"] >= 3],
-            key=lambda x: x[1]["rate"], reverse=True
-        )
-        if hot_event_suffix:
-            top = hot_event_suffix[0]
-            st.markdown(f"旧イベント日に最も強い末尾: **末尾{top[0]}**（{top[1]['rate']*100:.0f}%）")
+    if next_event:
+        event_dow = DAY_NAMES[next_event.weekday()]
+        st.markdown(f"次の旧イベント日 → **{next_event.strftime('%m/%d')}（{event_dow}）**")
 
 # =============================================
-# 4. 直近データ一覧（高設定台だけ）
+# ★★★ 曜日×末尾クロス分析 ★★★
 # =============================================
 st.markdown("---")
-st.header("📊 直近の高設定台一覧")
+st.header("🔢 曜日×末尾 クロス分析（どの曜日にどの末尾が熱いか）")
 
-recent_high = df[df["estimated_setting"] >= 4].sort_values(
-    ["play_date", "estimated_setting"], ascending=[False, False]
-).head(30)
+# クロス集計
+cross = defaultdict(lambda: {"total": 0, "high": 0})
+for row in all_dicts:
+    dow = row.get("day_of_week")
+    suffix = row.get("unit_suffix")
+    setting = row.get("estimated_setting")
+    if dow is None or suffix is None or setting is None:
+        continue
+    key = (int(dow), int(suffix))
+    cross[key]["total"] += 1
+    if setting >= 4:
+        cross[key]["high"] += 1
 
-if not recent_high.empty:
-    display_df = recent_high[["play_date", "machine_name", "unit_number",
-                              "total_games", "bb_count", "rb_count",
-                              "combined_prob", "estimated_setting", "setting_confidence"]].copy()
-    display_df.columns = ["日付", "機種", "台番", "G数", "BB", "RB", "合算", "推定設定", "信頼度"]
-    display_df["合算"] = display_df["合算"].apply(lambda x: f"1/{x:.0f}" if pd.notna(x) else "-")
-    display_df["信頼度"] = display_df["信頼度"].apply(lambda x: f"{x:.0%}" if pd.notna(x) else "-")
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
-else:
-    st.info("高設定（設定4以上）と推定された台はまだありません。")
+# テーブル作成
+cross_data = []
+for dow_idx, day_name in enumerate(DAY_NAMES):
+    row_data = {"曜日": day_name}
+    for suffix in range(10):
+        info = cross.get((dow_idx, suffix), {"total": 0, "high": 0})
+        if info["total"] >= 3:
+            rate = info["high"] / info["total"] * 100
+            row_data[f"末尾{suffix}"] = f"{rate:.0f}%"
+        else:
+            row_data[f"末尾{suffix}"] = "-"
+    cross_data.append(row_data)
 
-st.caption("※ 高設定率 = 推定設定4以上の割合。データが多いほど信頼性が上がります。")
+cross_df = pd.DataFrame(cross_data)
+st.dataframe(cross_df, use_container_width=True, hide_index=True)
+
+# 最強の曜日×末尾コンボを抽出
+best_combos = []
+for (dow_idx, suffix), info in cross.items():
+    if info["total"] >= 3:
+        rate = info["high"] / info["total"]
+        best_combos.append({
+            "曜日": DAY_NAMES[dow_idx],
+            "末尾": suffix,
+            "rate": rate,
+            "total": info["total"],
+            "high": info["high"],
+        })
+
+best_combos.sort(key=lambda x: -x["rate"])
+
+if best_combos:
+    st.markdown("### 最強コンボ TOP5")
+    for i, combo in enumerate(best_combos[:5]):
+        rate = combo["rate"] * 100
+        medal = ["🥇", "🥈", "🥉", "4.", "5."][i]
+        st.markdown(
+            f"{medal} **{combo['曜日']}曜日 × 末尾{combo['末尾']}** → "
+            f"高設定率 **{rate:.0f}%**（{combo['total']}回中{combo['high']}回）"
+        )
+
+    # 今日のコンボ
+    today_combos = [c for c in best_combos if c["曜日"] == today_name]
+    if today_combos:
+        best_today = today_combos[0]
+        st.info(
+            f"今日（{today_name}曜日）の最強末尾 → **末尾{best_today['末尾']}** "
+            f"（高設定率 {best_today['rate']*100:.0f}%）"
+        )
+
+# =============================================
+# ★★★ 機種別 狙い目サマリー ★★★
+# =============================================
+st.markdown("---")
+st.header("🎰 機種別 狙い目")
+
+machine_data = analyze_machine_patterns(all_dicts)
+for machine, info in sorted(machine_data.items(), key=lambda x: -x[1]["rate"]):
+    rate = info["rate"] * 100
+    if info["total"] == 0:
+        continue
+
+    # この機種の狙い台を抽出
+    machine_units = [u for u in unit_ranking if u["機種"] == machine][:3]
+
+    with st.expander(f"{'🔥' if rate >= 15 else '　'} {machine} — 高設定率 {rate:.1f}%（{info['total']}台中{info['high']}台）"):
+        if machine_units:
+            st.markdown("**狙い台番号:**")
+            for u in machine_units:
+                st.markdown(f"- 台番**{u['台番号']}** — 高設定率 {u['高設定率']}（{u['データ日数']}日中{u['高設定回数']}回）")
+        else:
+            st.caption("まだ狙い台の特定に十分なデータがありません。")
+
+        # この機種の末尾傾向
+        machine_rows = [r for r in all_dicts if r.get("machine_name") == machine]
+        if machine_rows:
+            m_suffix = analyze_suffix_patterns(machine_rows)
+            hot = [(s, d) for s, d in m_suffix.items() if d["total"] >= 3 and d["rate"] > 0]
+            hot.sort(key=lambda x: -x[1]["rate"])
+            if hot:
+                suffix_text = " / ".join([f"末尾{s}({d['rate']*100:.0f}%)" for s, d in hot[:3]])
+                st.markdown(f"**狙い末尾:** {suffix_text}")
+
+st.markdown("---")
+st.caption("※ 高設定 = 推定設定4以上。n数が少ない場合は信頼性が低いので注意。データが2〜3週間溜まると精度が上がります。")
