@@ -19,6 +19,14 @@ from scraper.sheets import SheetsManager
 from analysis.visualize import create_setting_heatmap, create_reg_trend
 
 st.set_page_config(page_title="機種別分析", layout="wide")
+
+try:
+    if st.secrets.get("PASSWORD") and not st.session_state.get("authenticated"):
+        st.warning("トップページからログインしてください。")
+        st.stop()
+except (FileNotFoundError, KeyError):
+    pass
+
 st.title("🔍 機種別分析")
 
 

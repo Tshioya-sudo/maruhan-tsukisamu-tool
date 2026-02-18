@@ -26,6 +26,13 @@ from analysis.patterns import (
 
 st.set_page_config(page_title="マルハン月寒 狙い目", layout="wide")
 
+try:
+    if st.secrets.get("PASSWORD") and not st.session_state.get("authenticated"):
+        st.warning("トップページからログインしてください。")
+        st.stop()
+except (FileNotFoundError, KeyError):
+    pass
+
 DAY_NAMES = ["月", "火", "水", "木", "金", "土", "日"]
 
 

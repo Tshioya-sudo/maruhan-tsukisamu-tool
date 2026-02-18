@@ -25,25 +25,41 @@ class SheetsManager:
     SHEET_MACHINES = "machines"
 
     def __init__(self):
-        """GitHub Secrets またはローカルファイルから認証"""
+        """GitHub Secrets / Streamlit Cloud / ローカルファイルから認証"""
         creds_json = os.environ.get("GOOGLE_SHEETS_CREDENTIALS")
+        spreadsheet_id = os.environ.get("SPREADSHEET_ID", "")
+
         if creds_json:
-            # GitHub Actions環境
+            # GitHub Actions環境（環境変数）
             creds_dict = json.loads(creds_json)
             creds = Credentials.from_service_account_info(
                 creds_dict, scopes=self.SCOPES
             )
         else:
-            # ローカル開発環境
-            creds_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "config",
-                "credentials.json",
-            )
-            creds = Credentials.from_service_account_file(creds_path, scopes=self.SCOPES)
+            # Streamlit Cloud または ローカルを判定
+            try:
+                import streamlit as st
+                secrets = st.secrets
+                if "GOOGLE_SHEETS_CREDENTIALS" in secrets:
+                    creds_dict = json.loads(secrets["GOOGLE_SHEETS_CREDENTIALS"])
+                    creds = Credentials.from_service_account_info(
+                        creds_dict, scopes=self.SCOPES
+                    )
+                    if not spreadsheet_id:
+                        spreadsheet_id = secrets.get("SPREADSHEET_ID", "")
+                else:
+                    raise KeyError("not in secrets")
+            except Exception:
+                # ローカル開発環境（credentials.jsonファイル）
+                creds_path = os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)),
+                    "config",
+                    "credentials.json",
+                )
+                creds = Credentials.from_service_account_file(creds_path, scopes=self.SCOPES)
 
         self.client = gspread.authorize(creds)
-        self.spreadsheet_id = os.environ.get("SPREADSHEET_ID", "")
+        self.spreadsheet_id = spreadsheet_id
         self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
         logger.info("Google Sheets接続成功")
 

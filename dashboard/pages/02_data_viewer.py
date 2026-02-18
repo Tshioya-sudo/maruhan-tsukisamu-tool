@@ -19,6 +19,14 @@ import pandas as pd
 from scraper.sheets import SheetsManager
 
 st.set_page_config(page_title="データ閲覧", layout="wide")
+
+try:
+    if st.secrets.get("PASSWORD") and not st.session_state.get("authenticated"):
+        st.warning("トップページからログインしてください。")
+        st.stop()
+except (FileNotFoundError, KeyError):
+    pass
+
 st.title("📋 データ閲覧")
 
 
