@@ -24,11 +24,16 @@ from scraper.parser import (
 
 logger = logging.getLogger(__name__)
 
+# ページ読み込みタイムアウト（ms）
+PAGE_TIMEOUT = 60000
+# 要素待機タイムアウト（ms）
+SELECTOR_TIMEOUT = 15000
+
 
 class MinRepoScraper:
     BASE_URL = "https://min-repo.com"
     STORE_PATH = "/tag/%E3%83%9E%E3%83%AB%E3%83%8F%E3%83%B3%E6%9C%88%E5%AF%92%E5%BA%97/"
-    SLEEP_SEC = 2  # リクエスト間隔（サーバー負荷配慮）
+    SLEEP_SEC = 3  # リクエスト間隔（サーバー負荷配慮・GitHub Actions安定化）
     MAX_RETRY = 3
 
     # ブラウザUser-Agent（Bot検出対策）
@@ -39,65 +44,53 @@ class MinRepoScraper:
     )
 
     # Phase 1 取得対象機種
-    # みんレポ上の正確な表記（2026/2/16 スクリーンショットで確認済み）
     TARGET_MACHINES = [
-        "マイジャグラーV",                      # 40台 ← 半角V
-        "スマスロ 沖ドキ!DUO アンコール",       # 36台
-        "ネオアイムジャグラーEX",                # 24台 ← 半角EX
-        "ゴーゴージャグラー３",                  # 22台 ← 全角３
-        "SアイムジャグラーＥＸ",                 # 12台 ← 全角ＥＸ
-        "ウルトラミラクルジャグラー",             # 6台
+        "マイジャグラーV",
+        "スマスロ 沖ドキ!DUO アンコール",
+        "ネオアイムジャグラーEX",
+        "ゴーゴージャグラー３",
+        "SアイムジャグラーＥＸ",
+        "ウルトラミラクルジャグラー",
     ]
 
     def __init__(self, headless=True):
         self.headless = headless
 
-    def _launch_browser(self, playwright):
-        """User-Agent付きでブラウザとコンテキストを起動"""
-        browser = playwright.chromium.launch(headless=self.headless)
-        context = browser.new_context(user_agent=self.USER_AGENT)
-        page = context.new_page()
-        return browser, context, page
+    def _goto_with_retry(self, page, url, retries=3):
+        """ページ遷移をリトライ付きで実行。domcontentloaded で待機。"""
+        for attempt in range(retries):
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
+                time.sleep(self.SLEEP_SEC)
+                return True
+            except Exception as e:
+                logger.warning(f"ページ読み込みリトライ {attempt + 1}/{retries}: {url} - {e}")
+                time.sleep(self.SLEEP_SEC * 2)
+        logger.error(f"ページ読み込み失敗: {url}")
+        return False
 
     def scrape_date_list(self) -> list[dict]:
-        """
-        店舗トップページから日付一覧を取得する。
-
-        実際のHTML構造:
-        <div class="table_wrap">
-          <table>
-            <tr><th>日付</th><th>総差枚</th><th>平均差枚</th><th>平均G</th><th>機種・末尾</th></tr>
-            <tr>
-              <td><a href="https://min-repo.com/2924707/">2/16(月)</a></td>
-              <td>-</td><td>-</td><td>2,595</td><td>...</td>
-            </tr>
-          </table>
-        </div>
-
-        Returns:
-            list[dict]: [{"date": "2026-02-16", "date_text": "2/16(月)",
-                          "article_id": "2924707", "avg_games": 2595}, ...]
-        """
+        """店舗トップページから日付一覧を取得する。"""
         with sync_playwright() as p:
-            browser, context, page = self._launch_browser(p)
+            browser = p.chromium.launch(headless=self.headless)
+            context = browser.new_context(user_agent=self.USER_AGENT)
+            page = context.new_page()
             try:
                 url = f"{self.BASE_URL}{self.STORE_PATH}"
-                page.goto(url, wait_until="networkidle")
-                time.sleep(self.SLEEP_SEC)
+                if not self._goto_with_retry(page, url):
+                    return []
 
                 # テーブル描画待機
                 try:
-                    page.wait_for_selector("div.table_wrap table", timeout=10000)
+                    page.wait_for_selector("div.table_wrap table", timeout=SELECTOR_TIMEOUT)
                 except Exception:
-                    logger.warning("店舗トップのテーブルが10秒以内に見つかりません")
+                    logger.warning("店舗トップのテーブルが見つかりません")
 
                 dates = []
-                # table_wrap内のテーブルを取得
                 tables = page.query_selector_all("div.table_wrap table")
                 for table in tables:
                     rows = table.query_selector_all("tr")
                     for row in rows:
-                        # ヘッダー行はスキップ
                         ths = row.query_selector_all("th")
                         if ths:
                             continue
@@ -113,7 +106,6 @@ class MinRepoScraper:
                         date_text = link.inner_text().strip()
                         href = link.get_attribute("href") or ""
                         article_id = extract_article_id(href)
-                        # 平均G数は4列目（index 3）
                         avg_g = parse_int(cells[3].inner_text())
 
                         if article_id:
@@ -131,26 +123,15 @@ class MinRepoScraper:
                 browser.close()
 
     def scrape_machine_list(self, article_id: str) -> list[str]:
-        """
-        日付ページから利用可能な機種名一覧を取得する。
-
-        実際のHTML構造:
-        <table class="kishu">
-          <tr>
-            <td><a href="?kishu=%E3%83%9E%E3%82%A4...">マイジャグラーV</a> (40)</td>
-            ...
-          </tr>
-        </table>
-
-        Returns:
-            list[str]: ["マイジャグラーV", "ゴーゴージャグラー３", ...]
-        """
+        """日付ページから利用可能な機種名一覧を取得する。"""
         url = f"{self.BASE_URL}/{article_id}/"
         with sync_playwright() as p:
-            browser, context, page = self._launch_browser(p)
+            browser = p.chromium.launch(headless=self.headless)
+            context = browser.new_context(user_agent=self.USER_AGENT)
+            page = context.new_page()
             try:
-                page.goto(url, wait_until="networkidle")
-                time.sleep(self.SLEEP_SEC)
+                if not self._goto_with_retry(page, url):
+                    return []
 
                 machines = []
                 links = page.query_selector_all("a[href*='kishu=']")
@@ -166,18 +147,13 @@ class MinRepoScraper:
                 browser.close()
 
     def get_verified_machine_names(self, article_id: str) -> list[str]:
-        """
-        初回実行時の安全策。
-        日付ページの実際の?kishu=リンクから正確な機種名を取得し、
-        TARGET_MACHINESとのマッチングを行う。
-        """
+        """TARGET_MACHINESとみんレポの実際の表記を照合する。"""
         actual_names = self.scrape_machine_list(article_id)
         verified = []
         for target in self.TARGET_MACHINES:
             if target in actual_names:
                 verified.append(target)
             else:
-                # NFKC正規化で部分一致フォールバック
                 matches = [a for a in actual_names
                            if self._normalize(target) in self._normalize(a)]
                 if matches:
@@ -192,12 +168,10 @@ class MinRepoScraper:
         actual = set(self.scrape_machine_list(article_id))
         target = set(self.TARGET_MACHINES)
 
-        # TARGET_MACHINESにあるがみんレポにない（撤去の可能性）
         missing = target - actual
         if missing:
             logger.warning(f"[機種変動] TARGET_MACHINESにあるがみんレポにない: {missing}")
 
-        # みんレポにあるがTARGET_MACHINESにないジャグラー系（新台の可能性）
         juggler_keywords = ["ジャグラー", "アイム", "ゴーゴー", "ファンキー", "ミラクル", "ハッピー"]
         new_jugglers = [m for m in (actual - target)
                         if any(kw in m for kw in juggler_keywords)]
@@ -206,40 +180,26 @@ class MinRepoScraper:
 
     def scrape_machine_data(self, article_id: str, machine_name: str,
                             target_date: str) -> list[dict]:
-        """
-        特定日付・特定機種の全台データを取得する。
-
-        実際のHTML構造（9列）:
-        <table> (classなし、div.table_wrap内)
-          <tr><th>台番</th><th>差枚</th><th>G数</th><th>出率</th>
-              <th>BB</th><th>RB</th><th>合成</th><th>BB率</th><th>RB率</th></tr>
-          <tr>
-            <td><a href="...?num=565">565</a></td>
-            <td>0</td><td>5,743</td><td>100%</td>
-            <td>26</td><td>23</td><td>1/117</td><td>1/221</td><td>1/250</td>
-          </tr>
-          ... (15行ごとにヘッダー行が再挿入される)
-          <tr class="avg_row">...</tr>  ← 最終行は平均
-        </table>
-        """
+        """特定日付・特定機種の全台データを取得する。"""
         encoded_name = urllib.parse.quote_plus(machine_name, encoding="utf-8")
         url = f"{self.BASE_URL}/{article_id}/?kishu={encoded_name}"
 
         for attempt in range(self.MAX_RETRY):
             try:
                 with sync_playwright() as p:
-                    browser, context, page = self._launch_browser(p)
+                    browser = p.chromium.launch(headless=self.headless)
+                    context = browser.new_context(user_agent=self.USER_AGENT)
+                    page = context.new_page()
                     try:
-                        page.goto(url, wait_until="networkidle")
-                        time.sleep(self.SLEEP_SEC)
+                        if not self._goto_with_retry(page, url, retries=2):
+                            continue
 
                         # テーブル描画待機
                         try:
-                            page.wait_for_selector("table", timeout=10000)
+                            page.wait_for_selector("table", timeout=SELECTOR_TIMEOUT)
                         except Exception:
-                            logger.warning(f"テーブル要素が10秒以内に見つかりません: {machine_name}")
+                            logger.warning(f"テーブル要素が見つかりません: {machine_name}")
 
-                        # 「台番」ヘッダーを含むテーブルを探す
                         header_check = page.query_selector(
                             "th:has-text('台番'), td:has-text('台番')"
                         )
@@ -251,7 +211,6 @@ class MinRepoScraper:
                         data = []
                         tables = page.query_selector_all("div.table_wrap table")
                         for table in tables:
-                            # ヘッダー行で「台番」を含むテーブルを特定
                             first_row = table.query_selector("tr")
                             if not first_row:
                                 continue
@@ -262,10 +221,8 @@ class MinRepoScraper:
 
                             rows = table.query_selector_all("tr")
                             for row in rows:
-                                # ヘッダー行（th含む）はスキップ
                                 if row.query_selector("th"):
                                     continue
-                                # 平均行はスキップ
                                 row_class = row.get_attribute("class") or ""
                                 if "avg_row" in row_class:
                                     continue
@@ -274,8 +231,6 @@ class MinRepoScraper:
                                 if len(cells) < 9:
                                     continue
 
-                                # 列マッピング（実際の9列構造）:
-                                # 0:台番 1:差枚 2:G数 3:出率 4:BB 5:RB 6:合成 7:BB率 8:RB率
                                 unit_text = cells[0].inner_text().strip()
                                 unit_num = parse_int(unit_text)
                                 if unit_num is None:
