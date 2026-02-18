@@ -1,12 +1,11 @@
 """
-分析ダッシュボード。
-ヒートマップ・曜日別/末尾別パターン分析・旧イベント日分析・ホット台一覧。
+分析ダッシュボード（狙い目特化版）
+一番上に「今日の狙い目」、下に根拠データを表示。
 """
 import sys
-import os
 from pathlib import Path
+from datetime import datetime
 
-# パス設定
 _root = Path(__file__).resolve().parent.parent.parent
 _site_packages = _root.parent / "Lib" / "site-packages"
 if _site_packages.exists():
@@ -15,7 +14,6 @@ sys.path.insert(0, str(_root))
 
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
 
 from scraper.sheets import SheetsManager
 from analysis.patterns import (
@@ -24,10 +22,8 @@ from analysis.patterns import (
     analyze_machine_patterns,
     find_hot_units,
 )
-from analysis.visualize import create_setting_heatmap, create_suffix_chart, create_dow_chart
 
-st.set_page_config(page_title="ダッシュボード", layout="wide")
-st.title("📊 マルハン月寒 分析ダッシュボード")
+st.set_page_config(page_title="マルハン月寒 狙い目", layout="wide")
 
 
 @st.cache_data(ttl=300)
@@ -41,14 +37,13 @@ try:
     df = load_data()
 except Exception as e:
     st.error(f"データ読み込みエラー: {e}")
-    st.info("Google Sheets認証情報とSPREADSHEET_IDを確認してください。")
     st.stop()
 
 if df.empty:
-    st.warning("データがありません。スクレイパーを実行してデータを取得してください。")
+    st.warning("データがありません。スクレイパーを実行してください。")
     st.stop()
 
-# カラム名の互換対応（日本語ヘッダー/英語ヘッダーどちらでも動くように）
+# カラム名の互換対応
 COLUMN_MAP = {
     "日付": "play_date", "機種名": "machine_name", "台番号": "unit_number",
     "総G数": "total_games", "BB回数": "bb_count", "RB回数": "rb_count",
@@ -58,120 +53,210 @@ COLUMN_MAP = {
 }
 df = df.rename(columns=COLUMN_MAP)
 
-# 数値型に変換
 for col in ["estimated_setting", "total_games", "bb_count", "rb_count",
             "combined_prob", "bb_prob", "rb_prob", "unit_number",
             "setting_confidence", "estimated_diff", "day_of_week", "unit_suffix"]:
     if col in df.columns:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-# --- 概要 ---
-st.markdown(f"**データ期間:** {df['play_date'].min()} 〜 {df['play_date'].max()}　|　**総レコード数:** {len(df):,}件　|　**日数:** {df['play_date'].nunique()}日")
+DAY_NAMES = ["月", "火", "水", "木", "金", "土", "日"]
 
-# --- フィルタ ---
-st.sidebar.header("フィルタ")
-machines = sorted(df["machine_name"].unique())
-selected_machine = st.sidebar.selectbox("機種", ["全機種"] + list(machines))
-
-if selected_machine != "全機種":
-    filtered_df = df[df["machine_name"] == selected_machine]
-else:
-    filtered_df = df
-
-# --- ヒートマップ ---
-st.subheader("設定ヒートマップ")
-machine_for_heatmap = selected_machine if selected_machine != "全機種" else None
-fig_heatmap = create_setting_heatmap(filtered_df, machine_for_heatmap)
-st.plotly_chart(fig_heatmap, use_container_width=True)
-
-# --- パターン分析 ---
-data_dicts = filtered_df.to_dict("records")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("末尾別 高設定出現率")
-    suffix_data = analyze_suffix_patterns(data_dicts)
-    fig_suffix = create_suffix_chart(suffix_data)
-    st.plotly_chart(fig_suffix, use_container_width=True)
-
-with col2:
-    st.subheader("曜日別 高設定出現率")
-    dow_data = analyze_day_of_week_patterns(data_dicts)
-    fig_dow = create_dow_chart(dow_data)
-    st.plotly_chart(fig_dow, use_container_width=True)
-
-# --- 旧イベント日分析（7のつく日: 7日・17日・27日）---
-st.subheader("🎯 旧イベント日分析（7のつく日: 7日・17日・27日）")
 
 def is_event_day(date_str):
-    """7のつく日かどうか判定"""
     try:
-        day = int(date_str.split("-")[2])
-        return day in (7, 17, 27)
+        return int(date_str.split("-")[2]) in (7, 17, 27)
     except Exception:
         return False
 
-filtered_df = filtered_df.copy()
-filtered_df["is_event"] = filtered_df["play_date"].apply(is_event_day)
 
-event_df = filtered_df[filtered_df["is_event"]]
-normal_df = filtered_df[~filtered_df["is_event"]]
+# =============================================
+# ヘッダー
+# =============================================
+st.title("🎰 マルハン月寒 狙い目ダッシュボード")
 
-col_ev1, col_ev2, col_ev3 = st.columns(3)
+latest_date = df["play_date"].max()
+total_days = df["play_date"].nunique()
+st.caption(f"データ: {df['play_date'].min()} 〜 {latest_date}（{total_days}日分）")
 
-with col_ev1:
-    event_high = event_df["estimated_setting"].dropna()
-    event_rate = (event_high >= 4).mean() * 100 if len(event_high) > 0 else 0
-    st.metric("旧イベント日 高設定率", f"{event_rate:.1f}%",
-              help=f"対象日数: {event_df['play_date'].nunique()}日, データ数: {len(event_high)}")
+# =============================================
+# 1. 今日の狙い目（一番目立つ場所）
+# =============================================
+st.markdown("---")
+st.header("🔥 狙い目まとめ")
 
-with col_ev2:
-    normal_high = normal_df["estimated_setting"].dropna()
-    normal_rate = (normal_high >= 4).mean() * 100 if len(normal_high) > 0 else 0
-    st.metric("通常日 高設定率", f"{normal_rate:.1f}%",
-              help=f"対象日数: {normal_df['play_date'].nunique()}日, データ数: {len(normal_high)}")
-
-with col_ev3:
-    diff = event_rate - normal_rate
-    st.metric("差分", f"{diff:+.1f}%",
-              delta=f"{'旧イベント日が高い' if diff > 0 else '通常日が高い'}",
-              delta_color="normal" if diff > 0 else "inverse")
-
-# 旧イベント日の末尾傾向
-if len(event_df) > 0:
-    event_dicts = event_df.to_dict("records")
-    event_suffix = analyze_suffix_patterns(event_dicts)
-    st.markdown("**旧イベント日の末尾別 高設定率:**")
-    suffix_items = []
-    for s in range(10):
-        info = event_suffix.get(s, {})
-        rate = info.get("rate", 0) * 100
-        total = info.get("total", 0)
-        if total > 0:
-            suffix_items.append(f"末尾{s}: {rate:.0f}% (n={total})")
-    st.text("　".join(suffix_items))
-else:
-    st.info("旧イベント日のデータがまだありません。")
-
-# --- ホット台一覧 ---
-st.subheader("🔥 直近7日間のホット台（複数回高設定）")
 all_dicts = df.to_dict("records")
-hot_units = find_hot_units(all_dicts, days=7, min_high_count=2)
-if hot_units:
-    hot_df = pd.DataFrame(hot_units)
-    hot_df.columns = ["機種名", "台番号", "高設定回数", "日付"]
-    hot_df["日付"] = hot_df["日付"].apply(lambda x: ", ".join(x))
-    st.dataframe(hot_df, use_container_width=True)
-else:
-    st.info("直近7日間で複数回高設定が入った台はありません。")
 
-# --- 機種別サマリー ---
-st.subheader("機種別 高設定出現率")
+# 曜日分析
+dow_data = analyze_day_of_week_patterns(all_dicts)
+today_dow = datetime.now().weekday()
+today_name = DAY_NAMES[today_dow]
+today_info = dow_data.get(today_name, {})
+today_rate = today_info.get("rate", 0) * 100
+
+# 末尾分析
+suffix_data = analyze_suffix_patterns(all_dicts)
+hot_suffixes = sorted(
+    [(s, d) for s, d in suffix_data.items() if d["total"] >= 5],
+    key=lambda x: x[1]["rate"], reverse=True
+)
+
+# 機種分析
 machine_data = analyze_machine_patterns(all_dicts)
-machine_df = pd.DataFrame([
-    {"機種": k, "総データ数": v["total"], "高設定数": v["high"],
-     "出現率": f"{v['rate']*100:.1f}%"}
-    for k, v in machine_data.items()
-]).sort_values("出現率", ascending=False)
-st.dataframe(machine_df, use_container_width=True)
+hot_machines = sorted(
+    machine_data.items(),
+    key=lambda x: x[1]["rate"], reverse=True
+)
+
+# ホット台
+hot_units = find_hot_units(all_dicts, days=7, min_high_count=2)
+
+# --- 狙い目カード ---
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.markdown("### 📅 狙い目の曜日")
+    # 全曜日をランク付け
+    dow_ranked = sorted(dow_data.items(), key=lambda x: x[1]["rate"], reverse=True)
+    for i, (day, info) in enumerate(dow_ranked):
+        rate = info["rate"] * 100
+        n = info["total"]
+        if n == 0:
+            continue
+        if i == 0:
+            st.markdown(f"**🥇 {day}曜日 → {rate:.1f}%** (n={n})")
+        elif i == 1:
+            st.markdown(f"**🥈 {day}曜日 → {rate:.1f}%** (n={n})")
+        elif i == 2:
+            st.markdown(f"🥉 {day}曜日 → {rate:.1f}% (n={n})")
+        else:
+            st.caption(f"　{day}曜日 → {rate:.1f}% (n={n})")
+
+    if today_rate > 0:
+        st.info(f"今日は **{today_name}曜日** → 高設定率 **{today_rate:.1f}%**")
+
+with col2:
+    st.markdown("### 🔢 狙い目の末尾")
+    for i, (suffix, info) in enumerate(hot_suffixes[:5]):
+        rate = info["rate"] * 100
+        n = info["total"]
+        if i == 0:
+            st.markdown(f"**🥇 末尾{suffix} → {rate:.1f}%** (n={n})")
+        elif i == 1:
+            st.markdown(f"**🥈 末尾{suffix} → {rate:.1f}%** (n={n})")
+        elif i == 2:
+            st.markdown(f"🥉 末尾{suffix} → {rate:.1f}% (n={n})")
+        else:
+            st.caption(f"　末尾{suffix} → {rate:.1f}% (n={n})")
+
+with col3:
+    st.markdown("### 🎰 狙い目の機種")
+    for i, (machine, info) in enumerate(hot_machines):
+        rate = info["rate"] * 100
+        n = info["total"]
+        if n == 0:
+            continue
+        short_name = machine[:10] + "..." if len(machine) > 10 else machine
+        if i == 0:
+            st.markdown(f"**🥇 {short_name} → {rate:.1f}%** (n={n})")
+        elif i == 1:
+            st.markdown(f"**🥈 {short_name} → {rate:.1f}%** (n={n})")
+        elif i == 2:
+            st.markdown(f"🥉 {short_name} → {rate:.1f}% (n={n})")
+        else:
+            st.caption(f"　{short_name} → {rate:.1f}% (n={n})")
+
+# =============================================
+# 2. リピート高設定台（ピンポイント狙い）
+# =============================================
+st.markdown("---")
+st.header("🎯 リピート高設定台（直近7日で2回以上）")
+
+if hot_units:
+    for unit in hot_units[:10]:
+        machine = unit["machine_name"]
+        num = unit["unit_number"]
+        count = unit["high_count"]
+        dates = ", ".join(unit["dates"])
+        st.markdown(
+            f"**{machine} 台番{num}** → 高設定 **{count}回** （{dates}）"
+        )
+else:
+    st.info("直近7日間でリピート高設定台はありません。データが溜まると表示されます。")
+
+# =============================================
+# 3. 旧イベント日分析（7のつく日）
+# =============================================
+st.markdown("---")
+st.header("📆 旧イベント日（7のつく日: 7日・17日・27日）")
+
+df_copy = df.copy()
+df_copy["is_event"] = df_copy["play_date"].apply(is_event_day)
+event_df = df_copy[df_copy["is_event"]]
+normal_df = df_copy[~df_copy["is_event"]]
+
+col_a, col_b = st.columns(2)
+
+with col_a:
+    event_settings = event_df["estimated_setting"].dropna()
+    if len(event_settings) > 0:
+        event_rate = (event_settings >= 4).mean() * 100
+        event_days = event_df["play_date"].nunique()
+        st.metric("旧イベント日の高設定率",
+                  f"{event_rate:.1f}%",
+                  help=f"{event_days}日分のデータ")
+    else:
+        st.metric("旧イベント日の高設定率", "データなし")
+
+with col_b:
+    normal_settings = normal_df["estimated_setting"].dropna()
+    if len(normal_settings) > 0:
+        normal_rate = (normal_settings >= 4).mean() * 100
+        normal_days = normal_df["play_date"].nunique()
+        st.metric("通常日の高設定率",
+                  f"{normal_rate:.1f}%",
+                  help=f"{normal_days}日分のデータ")
+    else:
+        st.metric("通常日の高設定率", "データなし")
+
+if len(event_settings) > 0 and len(normal_settings) > 0:
+    diff = event_rate - normal_rate
+    if diff > 3:
+        st.success(f"旧イベント日は通常日より **+{diff:.1f}%** 高設定が多い → **狙い目！**")
+    elif diff > 0:
+        st.info(f"旧イベント日は通常日より +{diff:.1f}% 高い（微差）")
+    else:
+        st.warning(f"旧イベント日は通常日より {diff:.1f}%（差なし or 通常日の方が高い）")
+
+    # 旧イベント日に強い末尾
+    if len(event_df) > 0:
+        event_suffix = analyze_suffix_patterns(event_df.to_dict("records"))
+        hot_event_suffix = sorted(
+            [(s, d) for s, d in event_suffix.items() if d["total"] >= 3],
+            key=lambda x: x[1]["rate"], reverse=True
+        )
+        if hot_event_suffix:
+            top = hot_event_suffix[0]
+            st.markdown(f"旧イベント日に最も強い末尾: **末尾{top[0]}**（{top[1]['rate']*100:.0f}%）")
+
+# =============================================
+# 4. 直近データ一覧（高設定台だけ）
+# =============================================
+st.markdown("---")
+st.header("📊 直近の高設定台一覧")
+
+recent_high = df[df["estimated_setting"] >= 4].sort_values(
+    ["play_date", "estimated_setting"], ascending=[False, False]
+).head(30)
+
+if not recent_high.empty:
+    display_df = recent_high[["play_date", "machine_name", "unit_number",
+                              "total_games", "bb_count", "rb_count",
+                              "combined_prob", "estimated_setting", "setting_confidence"]].copy()
+    display_df.columns = ["日付", "機種", "台番", "G数", "BB", "RB", "合算", "推定設定", "信頼度"]
+    display_df["合算"] = display_df["合算"].apply(lambda x: f"1/{x:.0f}" if pd.notna(x) else "-")
+    display_df["信頼度"] = display_df["信頼度"].apply(lambda x: f"{x:.0%}" if pd.notna(x) else "-")
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+else:
+    st.info("高設定（設定4以上）と推定された台はまだありません。")
+
+st.caption("※ 高設定率 = 推定設定4以上の割合。データが多いほど信頼性が上がります。")
