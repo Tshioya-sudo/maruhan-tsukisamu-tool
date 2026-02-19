@@ -106,8 +106,9 @@ def main():
     date_list = scraper.scrape_date_list()
     logger.info(f"みんレポ掲載日付数: {len(date_list)}")
 
-    # 4. 未取得の日付だけ処理
+    # 4. 未取得の日付だけ処理（新しい日付を優先して処理）
     new_dates = [d for d in date_list if d["date"] not in existing_dates]
+    new_dates.sort(key=lambda d: d["date"], reverse=True)
     logger.info(f"新規取得対象: {len(new_dates)}日分")
 
     if not new_dates:
@@ -117,7 +118,7 @@ def main():
     # 4.1 1回の実行で処理する日数を制限（GitHub Actions 15分タイムアウト対策）
     # 1日分≒40秒 × 5日 = 約3〜4分。余裕を持って5日に制限。
     # 未取得分が残っていれば次回実行で自動的に続きを取得する。
-    MAX_DATES_PER_RUN = 5
+    MAX_DATES_PER_RUN = 2
     if len(new_dates) > MAX_DATES_PER_RUN:
         logger.info(f"1回の実行上限{MAX_DATES_PER_RUN}日に制限（残り{len(new_dates) - MAX_DATES_PER_RUN}日は次回）")
         new_dates = new_dates[:MAX_DATES_PER_RUN]
@@ -127,8 +128,8 @@ def main():
     verified_machines = scraper.get_verified_machine_names(first_article_id)
     logger.info(f"検証済み機種: {verified_machines}")
 
-    # 機種変動チェック
-    scraper.check_machine_changes(first_article_id)
+    # 機種変動チェック（一時無効化）
+    # scraper.check_machine_changes(first_article_id)
 
     for date_info in new_dates:
         target_date = date_info["date"]
@@ -159,6 +160,7 @@ def main():
                     row.get("total_games"),
                     row.get("bb_count"),
                     row.get("rb_count"),
+                    payout_rate=row.get("payout_rate"),
                 )
                 row["estimated_setting"] = result["estimated_setting"]
                 row["setting_confidence"] = result["confidence"]
@@ -208,6 +210,9 @@ def main():
 
         # みんレポへの負荷配慮
         time.sleep(2)
+
+    # 10. データを日付順にソート
+    sheets.sort_daily_data_by_date()
 
     total_duration = time.time() - start_time
     logger.info(f"=== スクレイピング完了 ({total_duration:.1f}秒) ===")

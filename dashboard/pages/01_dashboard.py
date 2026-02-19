@@ -13,6 +13,7 @@ if _site_packages.exists():
     sys.path.insert(0, str(_site_packages))
 sys.path.insert(0, str(_root))
 
+import json
 import streamlit as st
 import pandas as pd
 
@@ -89,6 +90,12 @@ if mask_old.any():
         df.loc[mask_old, "estimated_diff"] + df.loc[mask_old, "total_games"] * 2.1
     ).round(0)
 
+# AT機種名セット（台ランキングから除外）
+_machines_path = _root / "config" / "machines.json"
+with open(_machines_path, "r", encoding="utf-8") as _f:
+    _machines_data = json.load(_f)
+AT_MACHINES = {m["machine_name"] for m in _machines_data["machines"] if m["machine_type"] == "at"}
+
 
 def is_event_day_date(d):
     return d.day in (7, 17, 27)
@@ -159,7 +166,7 @@ for suffix in range(10):
         today_suffix_ranked.append((suffix, info["high"] / info["total"] * 100, info["total"]))
 today_suffix_ranked.sort(key=lambda x: -x[1])
 
-# --- 事前計算: 高設定台ランキング（直近重み付き） ---
+# --- 事前計算: 高設定台ランキング（直近重み付き）--- AT機は除外 ---
 unit_stats_pre = defaultdict(lambda: {"high": 0, "total": 0, "recent_high": 0, "machine": "", "dates": []})
 recent_cutoff = sorted_dates[-7:] if len(sorted_dates) >= 7 else sorted_dates
 for row in all_dicts:
@@ -168,6 +175,8 @@ for row in all_dicts:
     setting = row.get("estimated_setting")
     date = row.get("play_date", "")
     if unit is None or setting is None:
+        continue
+    if machine in AT_MACHINES:
         continue
     try:
         key = (machine, int(unit))
@@ -316,7 +325,7 @@ if sueoki_candidates:
 st.markdown("---")
 st.header("🎯 次に座るべき台（具体的な台番号）")
 
-# 各台の高設定回数と直近の実績を計算
+# 各台の高設定回数と直近の実績を計算（AT機は除外: 台番号での設定判別が困難なため）
 unit_stats = defaultdict(lambda: {"high_count": 0, "total": 0, "dates": [], "machine": ""})
 for row in all_dicts:
     machine = row.get("machine_name", "")
@@ -324,6 +333,8 @@ for row in all_dicts:
     setting = row.get("estimated_setting")
     date = row.get("play_date", "")
     if unit is None or setting is None:
+        continue
+    if machine in AT_MACHINES:
         continue
     try:
         key = (machine, int(unit))
@@ -369,6 +380,98 @@ if unit_ranking:
         )
 else:
     st.info("データが溜まると具体的な台番号の推薦が表示されます（最低3日分必要）。")
+
+# =============================================
+# ★★★ 沖ドキ!DUO 専用分析 ★★★
+# =============================================
+st.markdown("---")
+st.header("🌺 スマスロ 沖ドキ!DUO アンコール 専用")
+st.caption("出率ベースで設定を推定。107%以上 → 設定4相当、110%以上 → 設定5相当、112%以上 → 設定6相当")
+
+OKIDOKI_NAME = "スマスロ 沖ドキ!DUO アンコール"
+df_oki = df[df["machine_name"] == OKIDOKI_NAME].copy()
+
+if df_oki.empty:
+    st.info("沖ドキ!DUOのデータがありません。")
+else:
+    # 最新日の全台データ
+    oki_latest_date = df_oki["play_date"].max()
+    df_oki_latest = df_oki[df_oki["play_date"] == oki_latest_date].sort_values("unit_number")
+
+    st.markdown(f"### 最新日（{oki_latest_date}）の全台出率")
+    if not df_oki_latest.empty:
+        oki_display = df_oki_latest[
+            ["unit_number", "total_games", "payout_rate", "estimated_setting", "estimated_diff"]
+        ].copy()
+        oki_display.columns = ["台番号", "G数", "出率(%)", "推定設定", "推定差枚"]
+        st.dataframe(oki_display, use_container_width=True, hide_index=True)
+
+        # 高設定台ハイライト
+        oki_high = df_oki_latest[df_oki_latest["payout_rate"] >= 107].sort_values(
+            "payout_rate", ascending=False
+        )
+        if not oki_high.empty:
+            for _, r in oki_high.iterrows():
+                rate_val = r["payout_rate"]
+                if rate_val >= 112:
+                    label = "設定6相当"
+                elif rate_val >= 110:
+                    label = "設定5相当"
+                else:
+                    label = "設定4相当"
+                games_val = int(r["total_games"]) if pd.notna(r["total_games"]) else 0
+                st.success(
+                    f"🔥 **台番{int(r['unit_number'])}** "
+                    f"出率 {rate_val:.1f}% → **{label}**（{games_val:,}G）"
+                )
+        else:
+            st.info(f"{oki_latest_date} は出率107%以上の台なし（高設定不在 or データ不足）")
+
+    # 台番号別の高出率実績
+    st.markdown("### 台番号別 高設定（出率107%以上）実績")
+    oki_unit_stats = defaultdict(lambda: {"total": 0, "high": 0, "rates": []})
+    for _, r in df_oki.iterrows():
+        unit = r.get("unit_number")
+        rate = r.get("payout_rate")
+        if pd.isna(unit) or pd.isna(rate):
+            continue
+        try:
+            u = int(unit)
+        except (ValueError, TypeError):
+            continue
+        oki_unit_stats[u]["total"] += 1
+        oki_unit_stats[u]["rates"].append(float(rate))
+        if float(rate) >= 107:
+            oki_unit_stats[u]["high"] += 1
+
+    oki_ranking = []
+    for unit, stats in oki_unit_stats.items():
+        if stats["total"] >= 2:
+            avg_rate = sum(stats["rates"]) / len(stats["rates"])
+            high_rate = stats["high"] / stats["total"]
+            oki_ranking.append({
+                "台番号": unit,
+                "出率107%以上回数": stats["high"],
+                "データ日数": stats["total"],
+                "高設定率": high_rate,
+                "平均出率(%)": round(avg_rate, 1),
+            })
+
+    oki_ranking.sort(key=lambda x: (-x["高設定率"], -x["平均出率(%)"]))
+
+    if oki_ranking:
+        oki_rank_df = pd.DataFrame(oki_ranking)
+        oki_rank_df["高設定率"] = oki_rank_df["高設定率"].apply(lambda x: f"{x:.0%}")
+        st.dataframe(oki_rank_df, use_container_width=True, hide_index=True)
+
+        top_oki = oki_ranking[0]
+        st.info(
+            f"沖ドキ最有力台: **台番{top_oki['台番号']}** — "
+            f"高設定率 {top_oki['高設定率']}（{top_oki['データ日数']}日中{top_oki['出率107%以上回数']}回） "
+            f"平均出率 {top_oki['平均出率(%)']}%"
+        )
+    else:
+        st.info("データが溜まると台番号別の高設定実績が表示されます（最低2日分必要）。")
 
 # =============================================
 # ★★★ 次に行くべき日 ★★★

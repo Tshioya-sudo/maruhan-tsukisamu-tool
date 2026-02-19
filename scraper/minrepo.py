@@ -179,12 +179,77 @@ class MinRepoScraper:
         if new_jugglers:
             logger.warning(f"[新機種検出] 未登録のジャグラー系: {new_jugglers}")
 
-    def scrape_machine_data(self, article_id: str, machine_name: str,
-                            target_date: str) -> list[dict]:
-        """特定日付・特定機種の全台データを取得する。"""
+    def _scrape_machine_data_with_page(self, page, article_id: str,
+                                       machine_name: str, target_date: str) -> list[dict]:
+        """既存のpageオブジェクトを使って機種データを取得する（ブラウザ再利用用）"""
         encoded_name = urllib.parse.quote_plus(machine_name, encoding="utf-8")
         url = f"{self.BASE_URL}/{article_id}/?kishu={encoded_name}"
 
+        if not self._goto_with_retry(page, url, retries=2):
+            return []
+
+        # テーブル描画待機
+        try:
+            page.wait_for_selector("table", timeout=SELECTOR_TIMEOUT)
+        except Exception:
+            logger.warning(f"テーブル要素が見つかりません: {machine_name}")
+
+        header_check = page.query_selector(
+            "th:has-text('台番'), td:has-text('台番')"
+        )
+        if not header_check:
+            logger.warning(
+                f"データテーブルのヘッダーが見つかりません: {machine_name}"
+            )
+
+        data = []
+        tables = page.query_selector_all("div.table_wrap table")
+        for table in tables:
+            first_row = table.query_selector("tr")
+            if not first_row:
+                continue
+            headers = [el.inner_text().strip()
+                       for el in first_row.query_selector_all("th, td")]
+            if not any("台番" in h for h in headers):
+                continue
+
+            rows = table.query_selector_all("tr")
+            for row in rows:
+                if row.query_selector("th"):
+                    continue
+                row_class = row.get_attribute("class") or ""
+                if "avg_row" in row_class:
+                    continue
+
+                cells = row.query_selector_all("td")
+                if len(cells) < 9:
+                    continue
+
+                unit_text = cells[0].inner_text().strip()
+                unit_num = parse_int(unit_text)
+                if unit_num is None:
+                    continue
+
+                data.append({
+                    "play_date": target_date,
+                    "machine_name": machine_name,
+                    "unit_number": unit_num,
+                    "diff_medals": parse_int(cells[1].inner_text()),
+                    "total_games": parse_int(cells[2].inner_text()),
+                    "payout_rate": parse_payout_rate(cells[3].inner_text()),
+                    "bb_count": parse_int(cells[4].inner_text()),
+                    "rb_count": parse_int(cells[5].inner_text()),
+                    "combined_prob": parse_prob(cells[6].inner_text()),
+                    "bb_prob": parse_prob(cells[7].inner_text()),
+                    "rb_prob": parse_prob(cells[8].inner_text()),
+                })
+
+        logger.info(f"{target_date} {machine_name}: {len(data)}台")
+        return data
+
+    def scrape_machine_data(self, article_id: str, machine_name: str,
+                            target_date: str) -> list[dict]:
+        """特定日付・特定機種の全台データを取得する。"""
         for attempt in range(self.MAX_RETRY):
             try:
                 with sync_playwright() as p:
@@ -192,67 +257,9 @@ class MinRepoScraper:
                     context = browser.new_context(user_agent=self.USER_AGENT)
                     page = context.new_page()
                     try:
-                        if not self._goto_with_retry(page, url, retries=2):
-                            continue
-
-                        # テーブル描画待機
-                        try:
-                            page.wait_for_selector("table", timeout=SELECTOR_TIMEOUT)
-                        except Exception:
-                            logger.warning(f"テーブル要素が見つかりません: {machine_name}")
-
-                        header_check = page.query_selector(
-                            "th:has-text('台番'), td:has-text('台番')"
+                        return self._scrape_machine_data_with_page(
+                            page, article_id, machine_name, target_date
                         )
-                        if not header_check:
-                            logger.warning(
-                                f"データテーブルのヘッダーが見つかりません: {machine_name}"
-                            )
-
-                        data = []
-                        tables = page.query_selector_all("div.table_wrap table")
-                        for table in tables:
-                            first_row = table.query_selector("tr")
-                            if not first_row:
-                                continue
-                            headers = [el.inner_text().strip()
-                                       for el in first_row.query_selector_all("th, td")]
-                            if not any("台番" in h for h in headers):
-                                continue
-
-                            rows = table.query_selector_all("tr")
-                            for row in rows:
-                                if row.query_selector("th"):
-                                    continue
-                                row_class = row.get_attribute("class") or ""
-                                if "avg_row" in row_class:
-                                    continue
-
-                                cells = row.query_selector_all("td")
-                                if len(cells) < 9:
-                                    continue
-
-                                unit_text = cells[0].inner_text().strip()
-                                unit_num = parse_int(unit_text)
-                                if unit_num is None:
-                                    continue
-
-                                data.append({
-                                    "play_date": target_date,
-                                    "machine_name": machine_name,
-                                    "unit_number": unit_num,
-                                    "diff_medals": parse_int(cells[1].inner_text()),
-                                    "total_games": parse_int(cells[2].inner_text()),
-                                    "payout_rate": parse_payout_rate(cells[3].inner_text()),
-                                    "bb_count": parse_int(cells[4].inner_text()),
-                                    "rb_count": parse_int(cells[5].inner_text()),
-                                    "combined_prob": parse_prob(cells[6].inner_text()),
-                                    "bb_prob": parse_prob(cells[7].inner_text()),
-                                    "rb_prob": parse_prob(cells[8].inner_text()),
-                                })
-
-                        logger.info(f"{target_date} {machine_name}: {len(data)}台")
-                        return data
                     finally:
                         browser.close()
 
@@ -265,15 +272,34 @@ class MinRepoScraper:
 
     def scrape_daily_all_machines(self, article_id: str, target_date: str,
                                   machines: list[str] = None) -> list[dict]:
-        """特定日付の全対象機種データを一括取得する。"""
+        """特定日付の全対象機種データを一括取得する（単一ブラウザで全機種を処理）"""
         if machines is None:
             machines = self.TARGET_MACHINES
 
         all_data = []
-        for machine in machines:
-            data = self.scrape_machine_data(article_id, machine, target_date)
-            all_data.extend(data)
-            time.sleep(self.SLEEP_SEC)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=self.headless)
+            context = browser.new_context(user_agent=self.USER_AGENT)
+            page = context.new_page()
+            try:
+                for machine in machines:
+                    for attempt in range(self.MAX_RETRY):
+                        try:
+                            data = self._scrape_machine_data_with_page(
+                                page, article_id, machine, target_date
+                            )
+                            all_data.extend(data)
+                            time.sleep(self.SLEEP_SEC)
+                            break
+                        except Exception as e:
+                            logger.warning(
+                                f"Attempt {attempt + 1}/{self.MAX_RETRY} ({machine}): {e}"
+                            )
+                            time.sleep(self.SLEEP_SEC * 2)
+                    else:
+                        logger.error(f"{target_date} {machine}: 全リトライ失敗")
+            finally:
+                browser.close()
 
         logger.info(f"{target_date}: 合計 {len(all_data)}台 ({len(machines)}機種)")
         return all_data

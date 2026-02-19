@@ -24,7 +24,8 @@ def _load_machines():
 
 
 def estimate_setting(machine_name: str, total_games: int | None,
-                     bb_count: int | None, rb_count: int | None) -> dict:
+                     bb_count: int | None, rb_count: int | None,
+                     payout_rate: float | None = None) -> dict:
     """
     ボーナス確率から設定を推定する。
 
@@ -68,7 +69,7 @@ def estimate_setting(machine_name: str, total_games: int | None,
     if machine["machine_type"] == "juggler":
         return _estimate_juggler(machine, total_games, actual_reg, actual_combined)
     elif machine["machine_type"] == "at":
-        return _estimate_at(machine, total_games, total_bonus)
+        return _estimate_at(machine, total_games, total_bonus, payout_rate)
 
     return {"estimated_setting": None, "confidence": 0.0, "reason": "不明"}
 
@@ -100,31 +101,35 @@ def _estimate_juggler(machine: dict, total_games: int,
     }
 
 
-def _estimate_at(machine: dict, total_games: int, total_bonus: int) -> dict:
-    """AT機: 初当たり確率ベース"""
-    if total_bonus == 0:
+def _estimate_at(machine: dict, total_games: int, total_bonus: int,
+                 payout_rate: float | None = None) -> dict:
+    """AT機: 出率ベース（payout_rateがある場合）または初当たり確率ベース"""
+    if payout_rate is not None:
+        # 出率から設定推定（沖ドキ等AT機向け）
+        if payout_rate >= 112:
+            setting = 6
+        elif payout_rate >= 110:
+            setting = 5
+        elif payout_rate >= 107:
+            setting = 4
+        elif payout_rate >= 103:
+            setting = 3
+        elif payout_rate >= 100:
+            setting = 2
+        else:
+            setting = 1
+
+        # G数が多いほど信頼度UP（最大0.8）
+        confidence = min(0.8, total_games / 8000)
         return {
-            "estimated_setting": None,
-            "confidence": 0.0,
-            "reason": "初当たりなし",
+            "estimated_setting": setting,
+            "confidence": round(confidence, 2),
+            "reason": f"出率 {payout_rate:.1f}%",
         }
 
-    actual_hit = total_games / total_bonus
-    best_setting = 1
-    best_diff = float("inf")
-
-    for setting_str, probs in machine["settings"].items():
-        setting = int(setting_str)
-        expected = probs.get("first_hit", 999)
-        diff = abs(actual_hit - expected)
-        if diff < best_diff:
-            best_diff = diff
-            best_setting = setting
-
-    # AT機は判別精度が低い
-    confidence = min(1.0, total_games / 8000) * 0.7
+    # payout_rateがない場合は判定不能
     return {
-        "estimated_setting": best_setting,
-        "confidence": round(confidence, 2),
-        "reason": f"初当たり 1/{actual_hit:.0f}",
+        "estimated_setting": None,
+        "confidence": 0.0,
+        "reason": "出率データなし",
     }

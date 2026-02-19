@@ -124,6 +124,12 @@ class SheetsManager:
         ]
         ws.append_rows([row], value_input_option="USER_ENTERED")
 
+    def sort_daily_data_by_date(self):
+        """daily_dataシートをplay_date（A列）昇順にソートする"""
+        ws = self.spreadsheet.worksheet(self.SHEET_DAILY_DATA)
+        ws.sort((1, "asc"), range="A2:O99999")
+        logger.info("daily_data: 日付昇順ソート完了")
+
     def read_all_daily_data(self):
         """daily_dataの全データをリストのリストとして取得"""
         ws = self.spreadsheet.worksheet(self.SHEET_DAILY_DATA)
