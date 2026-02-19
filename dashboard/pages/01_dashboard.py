@@ -64,6 +64,10 @@ COLUMN_MAP = {
 }
 df = df.rename(columns=COLUMN_MAP)
 
+# シートのヘッダーにO列(payout_rate/出率)が未設定の場合でもエラーにならないよう保護
+if "payout_rate" not in df.columns:
+    df["payout_rate"] = None
+
 for col in ["estimated_setting", "total_games", "bb_count", "rb_count",
             "combined_prob", "bb_prob", "rb_prob", "unit_number",
             "setting_confidence", "estimated_diff", "day_of_week", "unit_suffix",
