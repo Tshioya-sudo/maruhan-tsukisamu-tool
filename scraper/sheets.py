@@ -152,22 +152,23 @@ class SheetsManager:
         "payout_rate", "store_name",
     ]
 
+    @staticmethod
+    def _is_date_like(value: str) -> bool:
+        """値が日付形式（YYYY-MM-DD or YYYY/MM/DD）かどうかを判定"""
+        import re
+        return bool(re.match(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}$", value.strip()))
+
     def read_all_daily_data(self):
         """daily_dataの全データをリストのリストとして取得"""
         ws = self.spreadsheet.worksheet(self.SHEET_DAILY_DATA)
         rows = ws.get_all_values()
         if not rows:
             return []
-        # 1行目がヘッダーかデータかを判定（play_date列が日付形式ならデータ行）
-        first = rows[0]
-        if first and len(first) > 0 and first[0] not in self.DAILY_COLUMNS and "日付" not in first[0]:
-            # ヘッダー行なし: 全行がデータ
-            data_rows = rows
-        else:
-            # ヘッダー行あり: 1行目をスキップ
-            data_rows = rows[1:]
         records = []
-        for row in data_rows:
+        for row in rows:
+            # A列（play_date）が日付形式でない行はスキップ（ヘッダー行・不正行）
+            if not row or not self._is_date_like(row[0]):
+                continue
             # 列数を合わせる（足りない場合は空文字で埋める）
             row += [""] * (len(self.DAILY_COLUMNS) - len(row))
             records.append(dict(zip(self.DAILY_COLUMNS, row)))
