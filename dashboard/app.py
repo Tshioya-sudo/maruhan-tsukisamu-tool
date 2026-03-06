@@ -28,14 +28,26 @@ def check_password():
     if st.session_state.get("authenticated"):
         return True
 
+    # 5回失敗でロックアウト
+    fail_count = st.session_state.get("login_fail_count", 0)
+    if fail_count >= 5:
+        st.error("ログイン試行回数が上限（5回）に達しました。ブラウザを再起動してください。")
+        return False
+
     st.title("🔐 ログイン")
     password = st.text_input("パスワードを入力", type="password")
     if st.button("ログイン"):
         if password == correct_pw:
             st.session_state["authenticated"] = True
+            st.session_state["login_fail_count"] = 0
             st.rerun()
         else:
-            st.error("パスワードが違います")
+            st.session_state["login_fail_count"] = fail_count + 1
+            remaining = 5 - st.session_state["login_fail_count"]
+            if remaining > 0:
+                st.error(f"パスワードが違います（残り{remaining}回）")
+            else:
+                st.error("ログイン試行回数が上限に達しました。ブラウザを再起動してください。")
     return False
 
 

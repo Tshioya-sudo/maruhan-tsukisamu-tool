@@ -67,7 +67,8 @@ class SheetsManager:
         """既に取得済みの日付一覧を返す"""
         ws = self.spreadsheet.worksheet(self.SHEET_DAILY_DATA)
         dates = ws.col_values(1)[1:]  # ヘッダー除く
-        return set(dates)
+        # 空行（シートの空セル）を除外して重複挿入を防ぐ
+        return set(d for d in dates if d.strip())
 
     def append_daily_data(self, rows: list[dict]):
         """daily_dataシートにデータを追加（append_rows で一括書き込み）"""
@@ -127,7 +128,8 @@ class SheetsManager:
     def sort_daily_data_by_date(self):
         """daily_dataシートをplay_date（A列）昇順にソートする"""
         ws = self.spreadsheet.worksheet(self.SHEET_DAILY_DATA)
-        ws.sort((1, "asc"), range="A2:O99999")
+        # range省略でシート全体をソート（行数上限を超えても確実に動作）
+        ws.sort((1, "asc"))
         logger.info("daily_data: 日付昇順ソート完了")
 
     def read_all_daily_data(self):

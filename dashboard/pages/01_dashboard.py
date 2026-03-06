@@ -122,7 +122,26 @@ def next_event_day():
 st.title("🎰 マルハン月寒 狙い目ダッシュボード")
 latest_date = df["play_date"].max()
 total_days = df["play_date"].nunique()
-st.caption(f"データ: {df['play_date'].min()} 〜 {latest_date}（{total_days}日分）")
+
+col_title, col_refresh = st.columns([5, 1])
+with col_title:
+    st.caption(f"データ: {df['play_date'].min()} 〜 {latest_date}（{total_days}日分）")
+with col_refresh:
+    if st.button("🔄 更新", help="キャッシュをクリアして最新データを読み込む"):
+        load_data.clear()
+        st.rerun()
+
+# データ鮮度チェック（最終データが3日以上古い場合に警告）
+try:
+    latest_dt = datetime.strptime(latest_date, "%Y-%m-%d")
+    data_age_days = (datetime.now() - latest_dt).days
+    if data_age_days >= 3:
+        st.warning(
+            f"最終データが **{data_age_days}日前**（{latest_date}）です。"
+            "スクレイパーが正常に動作しているか確認してください。"
+        )
+except (ValueError, TypeError):
+    pass
 
 all_dicts = df.to_dict("records")
 
@@ -878,12 +897,22 @@ st.caption("台番号 × 日付 の差枚を色分け表示。赤＝プラス、
 
 heatmap_machines = sorted(df["machine_name"].dropna().unique())
 if heatmap_machines:
-    heatmap_selected = st.selectbox(
-        "機種を選択", heatmap_machines, key="heatmap_machine"
-    )
-    df_heatmap = df[df["machine_name"] == heatmap_selected].dropna(
-        subset=["unit_number", "play_date", "estimated_diff"]
-    )
+    hm_col1, hm_col2 = st.columns([2, 1])
+    with hm_col1:
+        heatmap_selected = st.selectbox(
+            "機種を選択", heatmap_machines, key="heatmap_machine"
+        )
+    with hm_col2:
+        all_dates = sorted(df["play_date"].dropna().unique())
+        heatmap_days = st.slider(
+            "表示日数（直近N日）", min_value=7, max_value=len(all_dates),
+            value=min(30, len(all_dates)), step=7, key="heatmap_days"
+        )
+    target_dates = set(all_dates[-heatmap_days:])
+    df_heatmap = df[
+        (df["machine_name"] == heatmap_selected) &
+        (df["play_date"].isin(target_dates))
+    ].dropna(subset=["unit_number", "play_date", "estimated_diff"])
     if not df_heatmap.empty:
         fig_heatmap = create_diff_heatmap(df_heatmap, heatmap_selected)
         st.plotly_chart(fig_heatmap, use_container_width=True)

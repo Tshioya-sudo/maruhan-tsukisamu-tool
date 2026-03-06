@@ -153,6 +153,17 @@ def main():
             # バリデーション
             validate_daily_data(raw_data, target_date)
 
+            # 異常な台番号の行を除外（警告のみでなく実際に除く）
+            before = len(raw_data)
+            raw_data = [
+                r for r in raw_data
+                if r.get("unit_number") and 100 <= r["unit_number"] <= 9999
+            ]
+            if len(raw_data) < before:
+                logger.warning(
+                    f"{target_date}: 異常台番号 {before - len(raw_data)}行を除外"
+                )
+
             # 6. 設定推測を実行
             for row in raw_data:
                 result = estimate_setting(
