@@ -142,10 +142,36 @@ class SheetsManager:
         ws.sort((1, "asc"))
         logger.info("daily_data: 日付昇順ソート完了")
 
+    # daily_data シートの列順（ヘッダー行がなくても動作させる）
+    DAILY_COLUMNS = [
+        "play_date", "machine_name", "unit_number",
+        "total_games", "bb_count", "rb_count",
+        "combined_prob", "bb_prob", "rb_prob",
+        "estimated_setting", "setting_confidence",
+        "estimated_diff", "day_of_week", "unit_suffix",
+        "payout_rate", "store_name",
+    ]
+
     def read_all_daily_data(self):
         """daily_dataの全データをリストのリストとして取得"""
         ws = self.spreadsheet.worksheet(self.SHEET_DAILY_DATA)
-        return ws.get_all_records()
+        rows = ws.get_all_values()
+        if not rows:
+            return []
+        # 1行目がヘッダーかデータかを判定（play_date列が日付形式ならデータ行）
+        first = rows[0]
+        if first and len(first) > 0 and first[0] not in self.DAILY_COLUMNS and "日付" not in first[0]:
+            # ヘッダー行なし: 全行がデータ
+            data_rows = rows
+        else:
+            # ヘッダー行あり: 1行目をスキップ
+            data_rows = rows[1:]
+        records = []
+        for row in data_rows:
+            # 列数を合わせる（足りない場合は空文字で埋める）
+            row += [""] * (len(self.DAILY_COLUMNS) - len(row))
+            records.append(dict(zip(self.DAILY_COLUMNS, row)))
+        return records
 
     def read_all_summary(self):
         """daily_summaryの全データを取得"""
