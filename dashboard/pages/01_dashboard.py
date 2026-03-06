@@ -16,6 +16,10 @@ sys.path.insert(0, str(_root))
 import json
 import streamlit as st
 import pandas as pd
+import numpy as np
+import plotly.express as px
+
+from analysis.visualize import create_diff_heatmap
 
 from scraper.sheets import SheetsManager
 from analysis.patterns import (
@@ -864,6 +868,219 @@ if daily_trend:
     st.bar_chart(trend_df.set_index("日付")["平均差枚"], use_container_width=True)
 else:
     st.info("データが溜まるとトレンドが表示されます。")
+
+# =============================================
+# ★★★ 出玉ヒートマップ ★★★
+# =============================================
+st.markdown("---")
+st.header("🗺️ 出玉ヒートマップ")
+st.caption("台番号 × 日付 の差枚を色分け表示。赤＝プラス、青＝マイナス。位置の偏りがあれば狙い目")
+
+heatmap_machines = sorted(df["machine_name"].dropna().unique())
+if heatmap_machines:
+    heatmap_selected = st.selectbox(
+        "機種を選択", heatmap_machines, key="heatmap_machine"
+    )
+    df_heatmap = df[df["machine_name"] == heatmap_selected].dropna(
+        subset=["unit_number", "play_date", "estimated_diff"]
+    )
+    if not df_heatmap.empty:
+        fig_heatmap = create_diff_heatmap(df_heatmap, heatmap_selected)
+        st.plotly_chart(fig_heatmap, use_container_width=True)
+    else:
+        st.info(f"{heatmap_selected} の差枚データがありません。")
+else:
+    st.info("データが溜まるとヒートマップが表示されます。")
+
+# =============================================
+# ★★★ 台番号グループ（ブロック）分析 ★★★
+# =============================================
+st.markdown("---")
+st.header("🏢 台番号グループ（ブロック）分析")
+st.caption("台番号を100番台ごとにグループ化。どのブロック（シマ）に高設定が入りやすいか")
+
+block_machines = ["全機種"] + sorted(df["machine_name"].dropna().unique())
+block_selected = st.selectbox("機種を選択", block_machines, key="block_machine")
+
+df_block = df.dropna(subset=["unit_number", "estimated_setting"]).copy()
+if block_selected != "全機種":
+    df_block = df_block[df_block["machine_name"] == block_selected]
+
+if not df_block.empty:
+    df_block["block"] = (df_block["unit_number"] // 100 * 100).astype(int)
+    block_stats = df_block.groupby("block").agg(
+        台数=("estimated_setting", "count"),
+        高設定数=("estimated_setting", lambda x: (x >= 4).sum()),
+        平均差枚=("estimated_diff", "mean"),
+    ).reset_index()
+    block_stats["高設定率"] = block_stats["高設定数"] / block_stats["台数"]
+    block_stats["平均差枚"] = block_stats["平均差枚"].round(0)
+    block_stats = block_stats[block_stats["台数"] >= 3].sort_values("block")
+
+    if not block_stats.empty:
+        display_block = block_stats.copy()
+        display_block["ブロック"] = display_block["block"].apply(lambda x: f"{x}番台")
+        display_block["高設定率表示"] = display_block["高設定率"].apply(lambda x: f"{x:.1%}")
+        display_block["平均差枚表示"] = display_block["平均差枚"].apply(lambda x: f"{x:+,.0f}")
+        st.dataframe(
+            display_block[["ブロック", "台数", "高設定数", "高設定率表示", "平均差枚表示"]].rename(
+                columns={"高設定率表示": "高設定率", "平均差枚表示": "平均差枚"}
+            ),
+            use_container_width=True, hide_index=True,
+        )
+
+        # バーチャート
+        chart_data = block_stats.set_index(
+            block_stats["block"].apply(lambda x: f"{x}番台")
+        )["高設定率"].apply(lambda x: round(x * 100, 1))
+        st.bar_chart(chart_data, use_container_width=True)
+
+        # 最もhotなブロック
+        best_block = block_stats.loc[block_stats["高設定率"].idxmax()]
+        st.success(
+            f"最も高設定が入りやすいブロック: **{int(best_block['block'])}番台** "
+            f"（高設定率 {best_block['高設定率']:.1%}、平均差枚 {best_block['平均差枚']:+,.0f}）"
+        )
+    else:
+        st.info("各ブロック最低3台分のデータが必要です。")
+else:
+    st.info("データが溜まるとブロック分析が表示されます。")
+
+# =============================================
+# ★★★ 高設定の周期性分析 ★★★
+# =============================================
+st.markdown("---")
+st.header("🔄 高設定の周期性分析")
+st.caption("高設定が入った後、同じ台に何日後にまた高設定が入るか → 周期パターンの検出")
+
+df_cycle = df.dropna(subset=["unit_number", "estimated_setting", "play_date"]).copy()
+df_cycle = df_cycle[df_cycle["estimated_setting"] >= 4]
+
+if len(df_cycle) >= 5:
+    # 各台の高設定日リストから間隔を計算
+    intervals = []
+    unit_intervals = defaultdict(list)
+    for (machine, unit), group in df_cycle.groupby(["machine_name", "unit_number"]):
+        dates_sorted = sorted(group["play_date"].unique())
+        if len(dates_sorted) < 2:
+            continue
+        for i in range(len(dates_sorted) - 1):
+            try:
+                d1 = datetime.strptime(dates_sorted[i], "%Y-%m-%d")
+                d2 = datetime.strptime(dates_sorted[i + 1], "%Y-%m-%d")
+                gap = (d2 - d1).days
+                if gap >= 1:
+                    intervals.append(gap)
+                    unit_intervals[(machine, int(unit))].append(gap)
+            except (ValueError, TypeError):
+                continue
+
+    if intervals:
+        # ヒストグラム
+        fig_cycle = px.histogram(
+            x=intervals,
+            nbins=min(max(intervals), 30),
+            labels={"x": "間隔（日数）", "y": "頻度"},
+            title="高設定の再出現間隔の分布",
+        )
+        fig_cycle.update_layout(bargap=0.1)
+        st.plotly_chart(fig_cycle, use_container_width=True)
+
+        # カテゴリ別カウント
+        sueoki = sum(1 for g in intervals if g == 1)
+        short = sum(1 for g in intervals if 2 <= g <= 3)
+        weekly = sum(1 for g in intervals if 6 <= g <= 8)
+        total_intervals = len(intervals)
+
+        col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+        with col_c1:
+            st.metric("据え置き（翌日）", f"{sueoki}回",
+                       help=f"全{total_intervals}回中")
+        with col_c2:
+            st.metric("短期（2-3日）", f"{short}回")
+        with col_c3:
+            st.metric("週次（6-8日）", f"{weekly}回")
+        with col_c4:
+            avg_interval = sum(intervals) / len(intervals)
+            st.metric("平均間隔", f"{avg_interval:.1f}日")
+
+        # 最も周期性が強い台（高設定2回以上の間隔が安定している台）
+        cycle_candidates = []
+        for (machine, unit), gaps in unit_intervals.items():
+            if len(gaps) >= 2:
+                avg_gap = sum(gaps) / len(gaps)
+                std_gap = (sum((g - avg_gap) ** 2 for g in gaps) / len(gaps)) ** 0.5
+                cycle_candidates.append({
+                    "machine": machine, "unit": unit,
+                    "count": len(gaps) + 1, "avg_gap": avg_gap, "std": std_gap,
+                })
+        cycle_candidates.sort(key=lambda x: (x["std"], -x["count"]))
+
+        if cycle_candidates:
+            st.markdown("#### 周期性が強い台 TOP5")
+            st.caption("標準偏差が小さい＝間隔が安定＝周期的に高設定が入る傾向")
+            for i, c in enumerate(cycle_candidates[:5]):
+                medal = ["🥇", "🥈", "🥉", "4.", "5."][i]
+                st.markdown(
+                    f"{medal} **{c['machine']} 台番{c['unit']}** — "
+                    f"高設定{c['count']}回、平均間隔 {c['avg_gap']:.1f}日（σ={c['std']:.1f}）"
+                )
+    else:
+        st.info("同じ台に2回以上高設定が入るとデータが表示されます。")
+else:
+    st.info("高設定データが溜まると周期性分析が表示されます。")
+
+# =============================================
+# ★★★ 混雑度 × 高設定率の相関 ★★★
+# =============================================
+st.markdown("---")
+st.header("👥 混雑度と高設定率の相関")
+st.caption("日別の平均G数（≒混雑度）と高設定率に関係があるか。混んでる日に高設定を入れる店かどうか")
+
+daily_congestion = []
+for date in sorted_dates:
+    day_df = df[df["play_date"] == date]
+    games = day_df["total_games"].dropna()
+    settings = day_df["estimated_setting"].dropna()
+    if len(games) >= 5 and len(settings) >= 5:
+        avg_games = games.mean()
+        high_rate = (settings >= 4).mean() * 100
+        daily_congestion.append({
+            "日付": date,
+            "avg_games": round(avg_games),
+            "high_rate": round(high_rate, 1),
+        })
+
+if len(daily_congestion) >= 5:
+    cong_df = pd.DataFrame(daily_congestion)
+
+    fig_cong = px.scatter(
+        cong_df, x="avg_games", y="high_rate",
+        labels={"avg_games": "平均G数（混雑度）", "high_rate": "高設定率(%)"},
+        title="混雑度 × 高設定率",
+        hover_data=["日付"],
+    )
+    fig_cong.update_traces(marker=dict(size=10, opacity=0.7))
+    st.plotly_chart(fig_cong, use_container_width=True)
+
+    # 相関係数
+    x = cong_df["avg_games"].values
+    y = cong_df["high_rate"].values
+    if len(x) >= 3:
+        r = float(np.corrcoef(x, y)[0, 1])
+        col_r1, col_r2 = st.columns(2)
+        with col_r1:
+            st.metric("相関係数 (r)", f"{r:.3f}",
+                       help="1に近い=正の相関、-1に近い=負の相関、0=無相関")
+        with col_r2:
+            if r > 0.3:
+                st.success("混んでる日ほど高設定が多い傾向 → 混雑日は狙い目！")
+            elif r < -0.3:
+                st.info("空いてる日の方が高設定率が高い → 穴場の日を狙え！")
+            else:
+                st.warning("混雑度と高設定率に明確な関係なし → 他の指標で判断")
+else:
+    st.info("5日以上のデータが溜まると混雑度分析が表示されます。")
 
 # =============================================
 # ★★★ 期待収支シミュレーション ★★★

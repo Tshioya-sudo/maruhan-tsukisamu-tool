@@ -100,6 +100,49 @@ def create_dow_chart(dow_data: dict) -> go.Figure:
     return fig
 
 
+def create_diff_heatmap(df: pd.DataFrame, machine_name: str = None) -> go.Figure:
+    """
+    台番号 × 日付 のヒートマップ（推定差枚の色分け）。
+    赤=プラス差枚、青=マイナス差枚、白=±0付近。
+    """
+    if machine_name:
+        df = df[df["machine_name"] == machine_name]
+
+    if df.empty:
+        return go.Figure().update_layout(title="データなし")
+
+    pivot = df.pivot_table(
+        index="unit_number",
+        columns="play_date",
+        values="estimated_diff",
+        aggfunc="first",
+    )
+    pivot = pivot.sort_index()
+
+    abs_max = max(abs(pivot.min().min()), abs(pivot.max().max()), 1)
+
+    fig = go.Figure(data=go.Heatmap(
+        z=pivot.values,
+        x=pivot.columns.tolist(),
+        y=pivot.index.tolist(),
+        colorscale="RdBu_r",
+        zmid=0,
+        zmin=-abs_max,
+        zmax=abs_max,
+        colorbar=dict(title="差枚"),
+        hoverongaps=False,
+        hovertemplate="台番%{y} / %{x}<br>差枚: %{z:,.0f}<extra></extra>",
+    ))
+    title = f"出玉ヒートマップ - {machine_name}" if machine_name else "出玉ヒートマップ（全機種）"
+    fig.update_layout(
+        title=title,
+        xaxis_title="日付",
+        yaxis_title="台番号",
+        yaxis=dict(type="category"),
+    )
+    return fig
+
+
 def create_reg_trend(df: pd.DataFrame, machine_name: str,
                      unit_number: int) -> go.Figure:
     """特定台のREG確率推移グラフ"""
