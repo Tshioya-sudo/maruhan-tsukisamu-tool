@@ -54,8 +54,9 @@ class MinRepoScraper:
         "ウルトラミラクルジャグラー",
     ]
 
-    def __init__(self, headless=True):
+    def __init__(self, store_path=None, headless=True):
         self.headless = headless
+        self.store_path = store_path or self.STORE_PATH
 
     def _goto_with_retry(self, page, url, retries=3):
         """ページ遷移をリトライ付きで実行。domcontentloaded で待機。"""
@@ -77,7 +78,7 @@ class MinRepoScraper:
             context = browser.new_context(user_agent=self.USER_AGENT)
             page = context.new_page()
             try:
-                url = f"{self.BASE_URL}{self.STORE_PATH}"
+                url = f"{self.BASE_URL}{self.store_path}"
                 if not self._goto_with_retry(page, url):
                     return []
 

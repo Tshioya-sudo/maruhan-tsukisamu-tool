@@ -55,8 +55,15 @@ COLUMN_MAP = {
     "推定設定": "estimated_setting", "信頼度": "setting_confidence",
     "推定差枚": "estimated_diff", "曜日": "day_of_week", "台番末尾": "unit_suffix",
     "出率": "payout_rate",
+    "店舗名": "store_name",
 }
 df = df.rename(columns=COLUMN_MAP)
+
+# store_name列がない旧データ互換
+if "store_name" not in df.columns:
+    df["store_name"] = "マルハン月寒店"
+else:
+    df["store_name"] = df["store_name"].fillna("マルハン月寒店").replace("", "マルハン月寒店")
 
 # 数値型に変換
 for col in ["estimated_setting", "total_games", "bb_count", "rb_count",
@@ -64,6 +71,11 @@ for col in ["estimated_setting", "total_games", "bb_count", "rb_count",
             "setting_confidence", "estimated_diff"]:
     if col in df.columns:
         df[col] = pd.to_numeric(df[col], errors="coerce")
+
+# --- 店舗選択 ---
+store_list = sorted(df["store_name"].unique())
+selected_store = st.sidebar.selectbox("🏪 店舗", store_list)
+df = df[df["store_name"] == selected_store]
 
 # --- 機種選択 ---
 machines = sorted(df["machine_name"].unique())

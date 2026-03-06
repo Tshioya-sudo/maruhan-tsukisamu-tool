@@ -1,12 +1,15 @@
 """
-過去データの設定推測を再計算するスクリプト。
-AT機の出率（payout_rate）を使った設定推定ロジックに対応するため、
-既存の全行を再計算して J列・K列・L列を上書きする。
+過去データの設定推測を再計算 + 店舗名一括付与スクリプト。
+
+機能:
+1. AT機の出率（payout_rate）を使った設定推定ロジックで J列・K列・L列を再計算
+2. P列（store_name）が空の行に「マルハン月寒店」を一括付与
 
 変更対象列:
   J列 (10): estimated_setting
   K列 (11): setting_confidence
   L列 (12): estimated_diff
+  P列 (16): store_name（空の場合のみ）
 """
 import sys
 import os
@@ -112,12 +115,30 @@ def main():
     logger.info(f"更新対象: {updated}行, スキップ: {skipped}行")
 
     if updates:
-        # batch_updateで一括書き込み（APIコールを最小化）
         logger.info("J〜L列（設定推測・信頼度・差枚）を一括更新中...")
         ws.batch_update(updates, value_input_option="USER_ENTERED")
         logger.info(f"完了: {updated}行を更新しました")
     else:
         logger.info("更新対象なし。全行が最新状態です")
+
+    # --- P列（store_name）の一括付与 ---
+    logger.info("P列（店舗名）の空欄チェック中...")
+    store_updates = []
+    for i, row in enumerate(records):
+        row_num = i + 2
+        existing_store = str(row.get("store_name", row.get("店舗名", ""))).strip()
+        if not existing_store:
+            store_updates.append({
+                "range": f"P{row_num}",
+                "values": [["マルハン月寒店"]],
+            })
+
+    if store_updates:
+        logger.info(f"P列に店舗名を付与: {len(store_updates)}行...")
+        ws.batch_update(store_updates, value_input_option="USER_ENTERED")
+        logger.info(f"完了: {len(store_updates)}行に「マルハン月寒店」を付与しました")
+    else:
+        logger.info("P列: 全行に店舗名が設定済みです")
 
 
 if __name__ == "__main__":

@@ -63,11 +63,20 @@ class SheetsManager:
         self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
         logger.info("Google Sheets接続成功")
 
-    def get_existing_dates(self) -> set[str]:
-        """既に取得済みの日付一覧を返す"""
+    def get_existing_dates(self, store_name: str = None) -> set[str]:
+        """既に取得済みの日付一覧を返す（store_name指定時は店舗別にフィルタ）"""
         ws = self.spreadsheet.worksheet(self.SHEET_DAILY_DATA)
         dates = ws.col_values(1)[1:]  # ヘッダー除く
-        # 空行（シートの空セル）を除外して重複挿入を防ぐ
+        if store_name:
+            # P列(16列目)のstore_nameでフィルタ
+            stores = ws.col_values(16)[1:]
+            # 列長が足りない場合は空文字で埋める
+            stores.extend([""] * (len(dates) - len(stores)))
+            return set(
+                d for d, s in zip(dates, stores)
+                if d.strip() and s.strip() == store_name
+            )
+        # 空行を除外
         return set(d for d in dates if d.strip())
 
     def append_daily_data(self, rows: list[dict]):
@@ -91,6 +100,7 @@ class SheetsManager:
                 r.get("day_of_week"),
                 r.get("unit_suffix"),
                 r.get("payout_rate"),
+                r.get("store_name"),
             ])
         if values:
             # append_rows（複数形）を使用。append_row（単数形）は1行ずつAPIコールになるため禁止。

@@ -65,12 +65,19 @@ COLUMN_MAP = {
     "推定設定": "estimated_setting", "信頼度": "setting_confidence",
     "推定差枚": "estimated_diff", "曜日": "day_of_week", "台番末尾": "unit_suffix",
     "出率": "payout_rate",
+    "店舗名": "store_name",
 }
 df = df.rename(columns=COLUMN_MAP)
 
 # シートのヘッダーにO列(payout_rate/出率)が未設定の場合でもエラーにならないよう保護
 if "payout_rate" not in df.columns:
     df["payout_rate"] = None
+
+# store_name列がない旧データ互換
+if "store_name" not in df.columns:
+    df["store_name"] = "マルハン月寒店"
+else:
+    df["store_name"] = df["store_name"].fillna("マルハン月寒店").replace("", "マルハン月寒店")
 
 for col in ["estimated_setting", "total_games", "bb_count", "rb_count",
             "combined_prob", "bb_prob", "rb_prob", "unit_number",
@@ -119,7 +126,12 @@ def next_event_day():
 
 
 # =============================================
-st.title("🎰 マルハン月寒 狙い目ダッシュボード")
+# 店舗セレクター
+store_list = sorted(df["store_name"].unique())
+selected_store = st.sidebar.selectbox("🏪 店舗", store_list)
+df = df[df["store_name"] == selected_store]
+
+st.title(f"🎰 {selected_store} 狙い目ダッシュボード")
 latest_date = df["play_date"].max()
 total_days = df["play_date"].nunique()
 
